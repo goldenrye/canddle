@@ -18,14 +18,15 @@ for high-sensitivity use.
 - Clients, operating systems, audio devices, dependencies, and the initial
   application distribution must be trustworthy. Malware can read audio before
   encryption or after decryption.
-- The invitation must reach the intended participant over an authenticated,
+- With manual calling, the invitation must reach the intended participant over an authenticated,
   confidential channel. Anyone holding its secret can impersonate a
   participant, including a malicious relay that obtains it.
 - Sharing an invitation in a messenger transfers trust to that messenger for
   that call's initial authentication. For stronger assurance, exchange it in
   person or over an already authenticated encrypted channel.
-- This is group-secret authentication for a group of two, not durable
-  person-to-person identity authentication. A relay token is not a peer identity.
+- The audio protocol uses group-secret authentication for a group of two. The
+  optional iPhone lobby adds verified device-key authentication for invitation
+  delivery, not proof of a person's real-world identity. A relay token is not a peer identity.
 - Compare the session verification code through an independent trusted channel.
   A mismatch requires hanging up. This check is user-operated, not a UI gate;
   the microphone opens after authenticated key confirmation.
@@ -121,6 +122,105 @@ Global pairing rate limiting is not DDoS protection.
 - `/healthz` is intentionally unauthenticated and returns only `ok`.
 - Browser-originated WebSocket requests are rejected. The protocol is for a
   locally installed native client, not a web page.
+
+### Foreground Lobby
+
+The native iPhone lobby starts with `{"v":1,"lobby":true}` instead of a room join
+on the same bearer-authenticated `/relay` WebSocket. Lobby frames are text JSON,
+at most 1024 bytes. This is a separate state machine from the binary audio path.
+It is foreground-only, with no push service, background ringing, or reconnect.
+Existing desktop clients continue using manual invitations.
+
+Each phone generates a persistent Ed25519 signing key. Its private bytes and
+verified peer keys/names are stored in the unlocked, device-only, nonsynchronizing
+Keychain. Peer trust is scoped to the exact relay URL and raw public signing key,
+not a name. A changed key always appears unverified. Names are untrusted metadata;
+the UI labels unknown keys explicitly and keeps a verified peer's original saved
+name. Trust is established by independently comparing the full per-request
+96-bit code on both phones. Both participants must perform that check for a new
+peer; clicking a match button without checking does not establish safe identity.
+No server-delivered certificate, name, access token, or key alone establishes trust.
+
+For the following protocol, define:
+
+```text
+T(purpose, fields...) =
+  ASCII("vpcomm/lobby/v1/") || ASCII(purpose) || 0x00 ||
+  concat(uint32-big-endian(len(UTF8(field))) || UTF8(field))
+```
+
+All binary JSON values are canonical unpadded base64url. IDs are 16 bytes,
+public keys 32 bytes, Ed25519 signatures 64 bytes. Names contain 1-40 printable
+ASCII characters. Signatures bind these names but do not certify them.
+
+1. Server sends a fresh 32-byte `challenge`. Client sends `register` with
+   `identity`, `name`, and an Ed25519 signature over
+   `T("register", challenge, identity, name)`. Duplicate connected identities
+   and replayed registration signatures are rejected by the honest server.
+2. Caller generates an independent random audio invitation, a fresh X25519
+   ephemeral key, and a random call ID. It sends `offer` with `call`, `identity`,
+   `ephemeral`, `name`, and signature over `T("offer", O...)`, where
+   `O = [call, callerIdentity, callerEphemeral, callerName]`.
+   The server broadcasts this metadata, not the invitation or its room ID.
+3. Requester verifies the offer signature and generates a fresh ephemeral key
+   and request ID. It sends `request` with `call`, `request`, `identity`,
+   `ephemeral`, `name`, and signature over `T("request", O..., R...)`, where
+   `R = [request, requesterIdentity, requesterEphemeral, requesterName]`.
+   Server forwards it only to the caller, who verifies the signature and binding.
+4. Both derive `binding = T("exchange", O..., R...)` and
+   `material = HKDF-SHA256(X25519(localEphemeralPrivate, peerEphemeralPublic),
+   salt=SHA256(binding), info=binding, length=64)`. The first 32 bytes form the
+   invitation AES-256-GCM key; the last 32 form a separate confirmation HMAC key.
+   The displayed code is the first 12 bytes of
+   `SHA256(T("verify") || binding || material)`, formatted as six four-hex groups.
+5. After verifying the caller (or matching a remembered key), the requester
+   explicitly confirms. It sends `confirm` with call/request IDs and
+   `proof = HMAC-SHA256(confirmationKey, T("confirmed") || binding)`.
+   The caller must verify this key-possession proof before enabling approval.
+   New trust is saved before sending confirmation or approval; storage failure
+   blocks that operation.
+6. After independently verifying the requester and explicitly approving, caller
+   sends `approve` with call/request IDs and `box`. This is AES-GCM encryption of
+   the 70-byte invitation, authenticating `binding`, with a fresh random 12-byte
+   nonce. The encoded box is `nonce || ciphertext || 16-byte tag` (98 bytes).
+   Only the selected requester can decrypt it. The honest server requires a
+   pending, confirmed request and the offer's owning socket.
+7. Without yielding, the server enqueues the box to the selected requester,
+   `granted` to the caller, and closes the announcement and all requests. Only one
+   approval wins. Each client accepts success only for its own current operation
+   (and only after local confirmation/approval), clears pending state, leaves the
+   lobby, and starts the existing authenticated audio handshake automatically.
+
+The server cannot validate the HMAC or decrypt the box; the endpoints do that.
+The server's grant/close events are coordination, not cryptographic authorization.
+The clients authenticate using signatures, remembered keys/independent code
+comparison, the confirmation HMAC, and invitation AEAD bound to both identities,
+ephemeral keys, roles, names, and request/call IDs. A malicious relay can suppress,
+replay announcements, reorder metadata, or terminate calls, but cannot deliver a
+valid invitation to a substituted verified key. Recorded boxes do not authenticate
+under a fresh request transcript. UI state consumes an approval only once.
+Ephemeral invitation-transfer keys are not persisted and give forward secrecy
+against later signing-key compromise, subject to the usual memory-erasure limits.
+
+Offers expire after two minutes; cancel, rejection, disconnect, expiry, or
+backgrounding clears pending state. Delivery is not transactional across phones:
+an approval lost during disconnect may require a new call. A server acknowledgment
+does not prove that the peer has opened its microphone. The existing audio
+handshake and bidirectional key confirmation remain required before capture.
+
+Lobby sockets share the server connection cap with audio. Each device has at most
+one offer or outgoing request; each offer holds at most 16 requests. Outbound
+queues hold 64 messages and slow peers are disconnected. Sends have three-second
+deadlines; incoming messages have a 12-message burst / 2-per-second refill.
+Client heartbeats run every 15 seconds, server inactivity limit is 45 seconds,
+and sessions end after one hour. These are resource bounds, not DDoS protection.
+
+The relay sees stable public device keys, names, availability, request/approval
+timing, and encrypted invitation boxes. Every connected lobby client sees call
+announcements, including newly connected clients while an offer is open. There
+is no server-side contact list or per-device access revocation; possession of
+the shared token permits lobby access. Removing peer trust is distinct from
+revoking relay access. Protect the token and rotate it if compromised.
 
 ## Authenticated Key Exchange
 
@@ -226,7 +326,9 @@ untransmitted/unplayed audio. Encrypted stream counters remain contiguous.
 These controls do not stop network floods, TLS exhaustion, or cost attacks.
 Use security-group restrictions and protect the relay token.
 
-The code does not persist audio, invitations, rooms, or contacts. Operational
+The server does not persist audio, invitations, rooms, or contacts. The iPhone
+does persist its lobby signing identity and verified peer keys in the Keychain.
+Operational
 warnings/errors can be logged. Caddy access logs are disabled in the supplied
 configuration. Administrators can still enable packet capture or logging;
 encryption does not make those capabilities disappear.

@@ -81,7 +81,7 @@ def tls_fixture(path, expired=False):
     return context, root
 
 
-async def probe(url, invitation, root=None, token=TOKEN, cancel=False, pairing=None):
+async def probe(url, invitation, root=None, token=TOKEN, cancel=False, pairing=None, lobby=None):
     process = await asyncio.create_subprocess_exec(
         PROBE,
         stdin=asyncio.subprocess.PIPE,
@@ -95,6 +95,7 @@ async def probe(url, invitation, root=None, token=TOKEN, cancel=False, pairing=N
         root=str(root) if root else None,
         cancel=cancel,
         pairing=json.dumps(pairing) if pairing else None,
+        lobby=lobby,
     )
     try:
         async with asyncio.timeout(15):
@@ -229,3 +230,52 @@ async def test_pairing_bad_response_and_cancellation(tmp_path, mode):
         )
         assert code != 0 and output.startswith("FAIL")
         assert "/stolen" not in hits
+
+
+@pytest.mark.parametrize("tls", [False, True])
+async def test_swift_lobby_approved_invitation(tmp_path, tls):
+    relay = Relay(TOKEN)
+    context, root = tls_fixture(tmp_path) if tls else (None, None)
+    invitation = Invitation.create()
+    async with serve(
+        relay.handle,
+        "127.0.0.1",
+        0,
+        ssl=context,
+        process_request=relay.authorize,
+        compression=None,
+        max_size=1024,
+    ) as server:
+        url = f"{'wss' if tls else 'ws'}://127.0.0.1:{server.sockets[0].getsockname()[1]}/relay"
+        results = await asyncio.gather(
+            probe(url, invitation, root, lobby="caller"),
+            probe(url, invitation, root, lobby="requester"),
+        )
+        for code, output, errors in results:
+            assert code == 0, errors + output
+            assert output.startswith("PASS lobby ")
+        assert results[0][1] == results[1][1]
+    assert not relay.lobby.offers
+    assert not relay.lobby.peers
+
+
+@pytest.mark.parametrize("failure", ["untrusted", "hostname", "expired", "token", "cancel"])
+async def test_swift_lobby_tls_and_cancellation(tmp_path, failure):
+    context, root = tls_fixture(tmp_path, expired=failure == "expired")
+    relay = Relay(TOKEN)
+    async with serve(
+        relay.handle, "127.0.0.1", 0, ssl=context, process_request=relay.authorize
+    ) as server:
+        host = "localhost" if failure == "hostname" else "127.0.0.1"
+        url = f"wss://{host}:{server.sockets[0].getsockname()[1]}/relay"
+        async with asyncio.timeout(3):
+            code, output, _ = await probe(
+                url,
+                Invitation.create(),
+                None if failure == "untrusted" else root,
+                token="b" * 40 if failure == "token" else TOKEN,
+                cancel=failure == "cancel",
+                lobby="caller",
+            )
+        assert code != 0 and output.startswith("FAIL")
+    assert not relay.lobby.offers

@@ -54,6 +54,7 @@ private struct SavedRelay: Codable {
 
 @MainActor
 final class CallStore: ObservableObject {
+    let lobby = LobbyStore()
     @Published var address = "" { didSet { saveRelay() } }
     @Published var token = "" { didSet { saveRelay() } }
     @Published private(set) var settingsError: String?
@@ -91,6 +92,7 @@ final class CallStore: ObservableObject {
 
     private func saveRelay() {
         guard !clearingRelay else { return }
+        if lobby.active { lobby.disconnect("Relay settings changed. Go online again.") }
         do {
             try SavedRelay(address: address, token: token).save()
             settingsError = nil
@@ -101,6 +103,7 @@ final class CallStore: ObservableObject {
 
     func forgetRelay() {
         guard !busy else { return }
+        lobby.disconnect()
         do {
             try SavedRelay.remove()
             clearingRelay = true
@@ -139,6 +142,7 @@ final class CallStore: ObservableObject {
 
     func redeemPairing(_ ticket: PairingTicket) {
         guard !busy else { return }
+        lobby.disconnect()
         let transport: Relay
         do {
             transport = Relay(try RelaySettings(address: ticket.relay, token: ticket.code, root: root))
@@ -194,6 +198,7 @@ final class CallStore: ObservableObject {
 
     func loadCertificate(_ url: URL) {
         guard !busy else { return }
+        lobby.disconnect()
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         do {
@@ -208,9 +213,24 @@ final class CallStore: ObservableObject {
 
     func clearCertificate() {
         guard !busy else { return }
+        lobby.disconnect()
         root = nil
         rootFingerprint = nil
         status = "Using standard iOS certificate trust."
+    }
+
+    func openLobby() {
+        guard !busy else { return }
+        do {
+            let settings = try RelaySettings(address: address, token: token, root: root)
+            lobby.connect(settings) { [weak self] invitation in
+                guard let self, !self.busy else { return }
+                self.invitation = invitation
+                self.start()
+            }
+        } catch {
+            status = (error as? VoiceError)?.errorDescription ?? "Check relay settings."
+        }
     }
 
     func start() {
@@ -224,6 +244,7 @@ final class CallStore: ObservableObject {
             status = (error as? VoiceError)?.errorDescription ?? "Check call details."
             return
         }
+        lobby.disconnect()
         let id = UUID()
         generation = id
         self.relay = relay
@@ -295,6 +316,7 @@ final class CallStore: ObservableObject {
     }
 
     func background() {
+        lobby.disconnect("Offline because VPComm left the foreground. Go online again to receive calls.")
         hangUp("Call ended because VPComm left the foreground.")
         scannedQR = nil
         scanningPairing = false

@@ -220,6 +220,39 @@ final class Relay {
         return reply.token
     }
 
+    func openLobby(identity: Curve25519.Signing.PrivateKey, name: String) async throws {
+        guard LobbyProtocol.nameValid(name), !ended else { throw VoiceError.packet }
+        socket.resume()
+        try await send(.string("{\"v\":1,\"lobby\":true}"), seconds: 10)
+        let challenge = try await lobbyReceive(seconds: 10)
+        guard challenge["type"] == "challenge", let nonce = challenge["challenge"] else {
+            throw VoiceError.packet
+        }
+        _ = try VoiceProtocol.decode(nonce, size: 32)
+        let publicKey = VoiceProtocol.base64(identity.publicKey.rawRepresentation)
+        try await lobbySend([
+            "type": "register", "identity": publicKey, "name": name,
+            "signature": VoiceProtocol.base64(try identity.signature(
+                for: LobbyProtocol.transcript("register", [nonce, publicKey, name])
+            ))
+        ])
+        guard try await lobbyReceive(seconds: 10) == ["type": "online"] else {
+            throw VoiceError.packet
+        }
+    }
+
+    func lobbySend(_ message: [String: String]) async throws {
+        let data = try JSONEncoder().encode(message)
+        guard data.count <= 1024 else { throw VoiceError.packet }
+        try await send(.string(String(decoding: data, as: UTF8.self)))
+    }
+
+    func lobbyReceive(seconds: Double = 45) async throws -> [String: String] {
+        guard case .string(let text) = try await receive(seconds: seconds),
+              text.utf8.count <= 1024 else { throw VoiceError.packet }
+        return try JSONDecoder().decode([String: String].self, from: Data(text.utf8))
+    }
+
     func connect(_ invitation: CallInvitation, waiting: () -> Void) async throws -> String {
         guard !ended else { throw VoiceError.ended }
         socket.resume()

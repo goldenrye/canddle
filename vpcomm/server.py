@@ -16,6 +16,7 @@ from http import HTTPStatus
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+from .lobby import Lobby
 from .pairing import PairingCodes, admin_socket
 
 LOG = logging.getLogger("vpcomm")
@@ -50,6 +51,7 @@ class Relay:
         self.rooms: dict[str, Room] = {}
         self.connections = 0
         self.pairing = pairing
+        self.lobby = Lobby()
 
     def authorize(self, connection, request):
         if request.path == "/pair":
@@ -105,6 +107,9 @@ class Relay:
             if not isinstance(raw, str) or len(raw) > 128:
                 raise ValueError("Invalid join")
             request = json.loads(raw)
+            if request == {"v": 1, "lobby": True}:
+                await self.lobby.handle(socket)
+                return
             if not isinstance(request, dict) or set(request) != {"v", "room"}:
                 raise ValueError("Invalid join")
             room_id = request["room"]

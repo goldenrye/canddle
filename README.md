@@ -1,11 +1,11 @@
 # VPComm
 
-A self-hosted, two-person audio calling prototype. A Python desktop client sends
+A self-hosted, two-person audio calling prototype. Python desktop and native iPhone clients send
 end-to-end encrypted audio through your own relay on EC2. There is no hosted
 calling API, database, analytics SDK, STUN service, TURN service, or recording
 service.
 
-**Status: stage-one prototype, not independently security audited.** This is
+**Status: experimental prototype, not independently security audited.** This is
 not a claim of anonymity, guaranteed protection from interception, or security
 equivalence to any established messenger.
 
@@ -169,7 +169,7 @@ real local WebSocket relay. Synthetic tests do not record or play real sound.
 - Use headphones; no echo cancellation, automatic gain, or noise suppression.
 - The default relay allows 32 connected sockets, a two-minute wait, and a
   one-hour call. These are safety limits, not measured capacity guarantees.
-- There are no accounts, persistent contact identities, push notifications,
+- The desktop client has no accounts, persistent contact identities, push notifications,
   ringing, recovery, or per-user access-token revocation.
 - Dependencies must be updated regularly. The server lock file records tested
   runtime versions; Docker base tags and development extras are not immutable
@@ -180,15 +180,23 @@ real local WebSocket relay. Synthetic tests do not record or play real sound.
 A native iOS 16+ client is available in [`iphone/`](iphone/README.md). Open
 `iphone/VPComm.xcodeproj` in Xcode, select your development signing team, and run
 it on your iPhone. It supports foreground calls with the desktop client or
-another iPhone, invitation sharing, verification codes, mute, hang-up, and
-private-CA certificates without changing the relay.
+another iPhone, manual invitation sharing, verification codes, mute, hang-up, and
+private-CA certificates.
+
+With the updated relay and app on both phones, **Call Lobby** removes invitation
+copy/paste: both phones go online, the caller announces a new call, a peer requests
+to join, and the caller approves. First-time peers independently compare a
+security code; their device keys are remembered in the Keychain. The invitation
+is encrypted only for the approved peer, then the audio call starts automatically.
+Announcements are visible to all online lobby peers. There is no extra port,
+database, or push service. Desktop clients still use manual invitations.
 
 See the [iPhone guide](iphone/README.md) for installation, TLS setup, tests, and
 physical-device acceptance checks. The microphone opens only after peer key
 confirmation. Backgrounding or audio interruption ends the call.
 
-Before wider deployment: independent protocol review, durable contact
-authentication, Opus compression, echo cancellation, device lifecycle and
+Before wider deployment: independent review of the audio and device-identity
+protocols, Opus compression, desktop echo cancellation, device lifecycle and
 network-change handling, stronger abuse controls, signed client releases,
 and a real-time media transport evaluation.
 

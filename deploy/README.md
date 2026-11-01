@@ -201,6 +201,42 @@ of 20 burst / 2 per second; this bounds attempts but cannot prevent denial of
 service. If pairing fails after redemption (lost response, cancellation, or
 Keychain failure), generate a new QR. Codes are deliberately not reusable.
 
+## Foreground Call Lobby
+
+The updated iPhone client supports **Go online**, **New call**, **Request to join**,
+and explicit caller approval, without copying invitations. Upgrade the server:
+
+```bash
+docker compose up -d --build
+```
+
+This can interrupt current calls. The lobby uses the existing authenticated
+`/relay` WebSocket endpoint; no new proxy route, public port, database, environment
+variable, or paid service is required. Old desktop/manual-invitation calls still
+work. Both iPhones must install the updated app and remain in the foreground.
+An old server will reject lobby registration; update it before using the feature.
+
+All connected lobby clients receive announcements, but only the caller-approved
+requester receives the end-to-end encrypted invitation. First-time peers must
+compare the full security code independently before confirming/approving.
+The relay access token does not establish a person's identity.
+
+The server retains only transient signaling data in RAM. It sees device public
+keys, names, announcements, request/approval metadata, and encrypted invitation
+boxes, never the plaintext invitation. Do not enable WebSocket frame logging.
+Restart clears all pending offers and requests. Run one relay replica.
+
+Limits: the existing connection budget is shared by calls and lobby sockets;
+one pending offer or outgoing request per device; at most 16 requests per offer;
+two-minute offers; one-hour lobby sessions; 1024-byte messages; 64 queued outbound
+messages per peer; three-second sends; and a 12-message burst / 2-per-second
+incoming budget. Idle clients send application heartbeats every 15 seconds and
+are disconnected after 45 seconds without messages. These limits do not stop
+network floods or a token holder from disrupting the lobby.
+
+The lobby does not use APNs/PushKit: locked or backgrounded iPhones do not ring.
+See [`../iphone/README.md`](../iphone/README.md) for peer verification and usage.
+
 ## Routine Operations
 
 - `docker compose logs --tail=50 relay caddy`: inspect operational failures.

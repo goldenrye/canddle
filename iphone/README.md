@@ -1,8 +1,9 @@
 # iPhone Client
 
 A fresh native SwiftUI implementation for iOS 16+, using only Apple frameworks.
-Calls work with the existing Python desktop client and relay. Optional QR
-pairing requires the updated relay and proxy configuration described below.
+Manual calls work with the existing Python desktop client and relay. The
+foreground call lobby requires the updated server and iPhone app on both ends.
+Optional QR pairing requires the updated relay and proxy configuration below.
 The source project is self-contained: no package downloads or project generator
 are needed.
 
@@ -19,7 +20,7 @@ are needed.
 No signing credentials are stored here. Local personal-device provisioning is
 subject to Apple's current personal-team restrictions and expiry. App Store or
 TestFlight distribution generally requires Apple Developer Program membership.
-This is a development project, not an App Store-ready release: app icons,
+This is a development project, not an App Store-ready release:
 distribution signing, privacy declarations, export compliance, and submission
 review remain release tasks.
 
@@ -38,7 +39,7 @@ Use a relay deployed according to [`../deploy/README.md`](../deploy/README.md).
 4. Confirm the displayed server is yours, then tap **Pair and save**. The app
    retrieves the token over verified HTTPS and saves the address/token together
    in the device-only Keychain. No invitation or audio is sent during pairing.
-5. Generate a fresh invitation and start a call as usual.
+5. Use the call lobby below, or generate a fresh manual invitation.
 
 The QR is single-use, contains no permanent token, and does not change certificate
 trust. The app never follows pairing redirects or opens the QR in a browser.
@@ -49,6 +50,51 @@ Pairing replaces the saved relay only after successful Keychain storage.
 
 This is one-time credential provisioning, not ongoing automatic synchronization.
 If the administrator rotates the shared relay token, pair again.
+
+### Call Without Copying Invitations
+
+1. Upgrade the relay (`docker compose up -d --build`) and install the updated app
+   on both phones. Keep using the same WSS address and saved access token.
+2. Under **Call Lobby**, choose a recognizable device name and tap **Go online**
+   on both phones. For private certificates, import and verify the CA first.
+3. The caller taps **New call**. Every connected lobby client sees an incoming
+   call announcement. The invitation secret stays on the caller's phone.
+4. The other phone taps **Request to join**. Both phones display the same
+   six-group security code.
+5. For an **unverified** device, compare the entire code in person or over an
+   independent trusted channel. Do not rely on the displayed name or a message
+   sent through this relay. Keep the app open: use another device for comparison
+   if necessary. A mismatch means cancel, not approve.
+6. The requester taps **Codes match: verify and request approval**. The caller
+   then taps **Codes match: verify and approve**. Each phone remembers the other's
+   device signing key, scoped to this relay, in its device-only Keychain.
+7. The caller encrypts the invitation specifically for that requester. Both
+   phones automatically leave the lobby and start the existing encrypted audio
+   handshake. Microphone permission may be requested. No invitation copy/paste
+   is necessary. Other pending requests are closed.
+
+On subsequent calls with the same verified keys, the requester taps **Confirm
+and request approval** and the caller taps **Approve and start call**. Manual
+approval remains required every time. A new/replaced key is unverified even
+when its display name matches a previous peer. Verified labels use the original
+saved name and show any current name separately.
+
+Announcements expire after two minutes. Callers can reject individual requests;
+either side can cancel or go offline. A disconnect, backgrounding, screen lock,
+or app exit cancels pending work and removes the announcement/request. There is
+no automatic reconnect: tap **Go online** again after returning or ending a call.
+Lobby sessions also end after one hour. All notifications are in-app updates,
+not push notifications or background ringing. The current desktop client keeps
+the manual-invitation workflow and does not participate in the lobby.
+
+Go offline before editing relay/TLS settings or using manual invitations.
+**Forget verified peers** removes all saved peer trust (up to 100 keys across
+relays) while retaining your own device identity. **Forget saved relay** deletes
+the relay address/token, not the separate device identity or peer trust. These
+Keychain entries may survive reinstall, are not synced to iCloud, and are
+accessible only while the device is unlocked. Invitations and ephemeral
+encryption keys are never stored. Failed trust writes prevent confirmation or
+approval, rather than silently treating the peer as verified.
 
 ### Manual Setup and Calling
 
@@ -123,9 +169,12 @@ No relay address, access token, invitation, or CA private key is bundled.
   Connect your preferred headphones before starting.
 - A brief inactive state obscures the interface but does not alone hang up.
   Transitioning to the background does.
-- No CallKit, APNs, background ringing, contacts, automatic reconnect, or accounts.
+- No CallKit, APNs, background ringing, system contacts, automatic reconnect, or accounts.
+- The lobby exposes call availability, public device keys, names, and request/
+  approval timing to the relay. All online lobby peers see announcements.
 - No app-managed recording, analytics, or cloud storage. Relay details persist
-  in the device-only Keychain; invitations and session keys exist only in memory.
+  in the device-only Keychain, along with lobby identity and verified peer keys;
+  invitations and session keys exist only in memory.
   Secure memory erasure is not
   guaranteed. OS diagnostics, clipboard recipients, or compromised devices
   remain outside these protections.
@@ -170,6 +219,12 @@ xcrun swiftc -parse-as-library iphone/Core/*.swift \
   iphone/Tests/Probe.swift -o /tmp/vpcomm-iphone-probe
 VPCOMM_IPHONE_PROBE=/tmp/vpcomm-iphone-probe \
   python -m pytest iphone/Tests/test_interop.py tests -q
+
+# Native observable lobby state with in-memory test storage (no user Keychain)
+xcrun swiftc -parse-as-library iphone/Core/*.swift iphone/App/LobbyStore.swift \
+  iphone/Tests/LobbyStoreChecks.swift -o /tmp/vpcomm-lobby-state
+VPCOMM_LOBBY_STORE_PROBE=/tmp/vpcomm-lobby-state \
+  python -m pytest iphone/Tests/test_lobby_state.py -q
 ```
 
 Install the root project's `test` dependencies in your Python environment first.
@@ -189,6 +244,11 @@ directions, matching verification codes, private-CA TLS, rejection of expired/
 untrusted/wrong-host certificates and bad tokens, stalled-connection deadlines,
 and hang-up cancellation. Separate native checks cover tampering, replay,
 reflection, wrong secrets, ordering, frame limits, and URL policy.
+Lobby checks cover signed registration/announcements/requests, transcript binding,
+encrypted invitation transfer over TLS, matching verification codes, authorization,
+single-winner approval, expiry, replayed registration, cancellation, trust reload,
+and fail-closed behavior when trust storage fails. Injected-storage tests do not
+verify actual device Keychain permissions or persistence.
 
 ## Physical-Device Acceptance
 
@@ -204,5 +264,11 @@ relying on this client, run iPhone-to-desktop and iPhone-to-iPhone calls and che
 - Scan a real terminal QR, confirm the expected host, relaunch and make a call.
 - Camera denial/cancellation, expired/reused QR rejection, and pairing with
   untrusted/wrong-host certificates. Never accept a TLS-bypass workaround.
+- Two iPhones: first-time code comparison, requester confirmation, caller
+  approval, and automatic bidirectional audio; repeat with remembered peer keys.
+- Multiple requesters: only the approved peer joins; verify reject, cancel,
+  expiry, backgrounding, and network loss before/during approval.
+- Relaunch and confirm verified keys persist; a different device with the same
+  name must still show as unverified. Test **Forget verified peers**.
 
 Independent security review remains necessary before high-sensitivity use.

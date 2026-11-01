@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 @main
@@ -52,6 +53,41 @@ struct ProtocolChecks {
                     String(repeating: "x", count: 1025)] {
             try rejects { _ = try PairingTicket.parse(bad) }
         }
-        print("PASS: invitation, authentication, tampering, replay, ordering, limits, endpoint policy")
+        let signingA = Curve25519.Signing.PrivateKey(), signingB = Curve25519.Signing.PrivateKey()
+        let ephemeralA = Curve25519.KeyAgreement.PrivateKey(), ephemeralB = Curve25519.KeyAgreement.PrivateKey()
+        let offer = try LobbyOffer.create(identity: signingA, name: "Alice", ephemeral: ephemeralA)
+        let request = try LobbyRequest.create(offer: offer, identity: signingB, name: "Bob", ephemeral: ephemeralB)
+        let caller = try LobbyExchange(offer: offer, request: request, ephemeral: ephemeralA, caller: true)
+        let joiner = try LobbyExchange(offer: offer, request: request, ephemeral: ephemeralB, caller: false)
+        precondition(caller.code == joiner.code)
+        try caller.verifyConfirmation(joiner.confirmation())
+        let box = try caller.seal(invite)
+        let received = try joiner.open(box)
+        precondition(received.text == invite.text)
+        var altered = try VoiceProtocol.decode(box, size: 98)
+        altered[20] ^= 1
+        try rejects { _ = try joiner.open(VoiceProtocol.base64(altered)) }
+        try rejects { try caller.verifyConfirmation(VoiceProtocol.base64(Data(repeating: 0, count: 32))) }
+        var wrongOffer = offer.message
+        wrongOffer["name"] = "Impostor"
+        try rejects { _ = try LobbyOffer(wrongOffer) }
+        var wrongRequest = request.message
+        wrongRequest["ephemeral"] = offer.ephemeral
+        try rejects { _ = try LobbyRequest(wrongRequest, offer: offer) }
+        let nextOffer = try LobbyOffer.create(identity: signingA, name: "Alice", ephemeral: ephemeralA)
+        wrongRequest = request.message
+        wrongRequest["call"] = nextOffer.id
+        try rejects { _ = try LobbyRequest(wrongRequest, offer: nextOffer) }
+        let nextRequest = try LobbyRequest.create(
+            offer: offer, identity: signingB, name: "Bob", ephemeral: ephemeralB
+        )
+        let nextExchange = try LobbyExchange(offer: offer, request: nextRequest, ephemeral: ephemeralB, caller: false)
+        precondition(nextExchange.code != joiner.code)
+        try rejects { _ = try nextExchange.open(box) }
+        try rejects {
+            _ = try LobbyExchange(offer: offer, request: request,
+                                  ephemeral: Curve25519.KeyAgreement.PrivateKey(), caller: true)
+        }
+        print("PASS: audio and lobby signatures, binding, encryption, confirmation, limits and URL policy")
     }
 }

@@ -8,7 +8,7 @@ struct VPCommApp: App {
 
     var body: some Scene {
         WindowGroup {
-            CallView(call: call)
+            CallView(call: call, lobby: call.lobby)
                 .overlay {
                     if phase != .active {
                         Color(.systemBackground).ignoresSafeArea()
@@ -22,6 +22,7 @@ struct VPCommApp: App {
 
 struct CallView: View {
     @ObservedObject var call: CallStore
+    @ObservedObject var lobby: LobbyStore
     @FocusState private var editing: Bool
 
     var body: some View {
@@ -30,6 +31,10 @@ struct CallView: View {
                 Section {
                     Label("A private line for two", systemImage: "lock.shield.fill").font(.headline)
                     Text("Your relay. End-to-end encrypted audio.").foregroundStyle(.secondary)
+                }
+                LobbyView(lobby: lobby, callBusy: call.busy) {
+                    editing = false
+                    call.openLobby()
                 }
                 Section {
                     Button {
@@ -56,7 +61,7 @@ struct CallView: View {
                 } footer: {
                     Text("Address and token are saved automatically in this iPhone's Keychain. "
                          + "They are not synced through iCloud.")
-                }.disabled(call.busy)
+                }.disabled(call.busy || lobby.active)
                 Section {
                     SecureField("Paste vp1 invitation", text: $call.invitation)
                         .focused($editing)
@@ -73,7 +78,7 @@ struct CallView: View {
                 } footer: {
                     Text("Share privately. Anyone holding the "
                          + "invitation can join as your partner. Use a new one for every call.")
-                }.disabled(call.busy)
+                }.disabled(call.busy || lobby.active)
                 Section("Call") {
                     Text(call.status).accessibilityIdentifier("status")
                     if call.connected {
@@ -96,7 +101,7 @@ struct CallView: View {
                         } label: {
                             Label("Start / Join", systemImage: "phone.fill")
                         }.accessibilityIdentifier("start")
-                            .disabled(call.address.isEmpty || call.token.isEmpty || call.invitation.isEmpty)
+                            .disabled(lobby.active || call.address.isEmpty || call.token.isEmpty || call.invitation.isEmpty)
                     }
                 }
                 Section {
@@ -114,7 +119,7 @@ struct CallView: View {
                 } footer: {
                     Text("Only needed for a privately issued server certificate. "
                          + "Import its public root CA and verify the fingerprint independently.")
-                }.disabled(call.busy)
+                }.disabled(call.busy || lobby.active)
                 Section("Privacy & Limits") {
                     Text("Keep this app open. Backgrounding, locking, or changing the audio route "
                          + "ends the call. Saved relay details are kept for your next call.")
