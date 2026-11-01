@@ -392,7 +392,9 @@ final class CallStore: ObservableObject {
     func hangUp(_ message: String = "Call ended. Use a new invitation.") {
         guard busy else { return }
         if groupAudio {
-            lobby.disconnect("You left the group call. Go online to receive calls again.")
+            let reason = message == "Call ended. Use a new invitation."
+                ? "You left the group call." : message
+            lobby.disconnect("\(reason) Go online to receive calls again.")
             return
         }
         task?.cancel()
@@ -439,12 +441,31 @@ final class CallStore: ObservableObject {
                       AVAudioSession.mediaServicesWereResetNotification] {
             observers.append(NotificationCenter.default.addObserver(
                 forName: event, object: nil, queue: .main
-            ) { [weak self] _ in
+            ) { [weak self] note in
+                guard Self.endsCall(note) else { return }
                 Task { @MainActor in
                     guard self?.generation == id else { return }
                     self?.hangUp("Audio route changed or was interrupted. Start a new call.")
                 }
             })
+        }
+    }
+
+    /// Configuring and activating the session (category, voice processing) posts
+    /// route changes of its own, delivered after observation starts. Only end the
+    /// call for real interruptions, lost devices, or a media services reset; other
+    /// breakage is caught by the engine-running checks and the capture watchdog.
+    nonisolated private static func endsCall(_ note: Notification) -> Bool {
+        let info = note.userInfo ?? [:]
+        switch note.name {
+        case AVAudioSession.interruptionNotification:
+            let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt
+            return raw.flatMap(AVAudioSession.InterruptionType.init) == .began
+        case AVAudioSession.routeChangeNotification:
+            let raw = info[AVAudioSessionRouteChangeReasonKey] as? UInt
+            return raw.flatMap(AVAudioSession.RouteChangeReason.init) == .oldDeviceUnavailable
+        default:
+            return true
         }
     }
 }
