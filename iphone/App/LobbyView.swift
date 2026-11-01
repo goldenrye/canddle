@@ -30,7 +30,8 @@ struct LobbyView: View {
                     }
                 }
                 if lobby.ownOffer != nil {
-                    Text("Waiting for join requests").font(.headline)
+                    Text(lobby.candidates.isEmpty ? "Waiting for join requests" : "Join requests")
+                        .font(.headline)
                     ForEach(lobby.candidates) { candidate in
                         VStack(alignment: .leading, spacing: 10) {
                             peer(candidate.exchange.request.identity, name: candidate.exchange.request.name)

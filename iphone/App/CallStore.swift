@@ -58,6 +58,7 @@ final class CallStore: ObservableObject {
     @Published var address = "" { didSet { saveRelay() } }
     @Published var token = "" { didSet { saveRelay() } }
     @Published private(set) var settingsError: String?
+    @Published var callFailure: String?
     @Published var invitation = ""
     @Published var importCertificate = false
     @Published var scanningPairing = false
@@ -244,18 +245,21 @@ final class CallStore: ObservableObject {
             status = (error as? VoiceError)?.errorDescription ?? "Check call details."
             return
         }
-        lobby.disconnect()
+        if lobby.active { lobby.disconnect() }
         let id = UUID()
         generation = id
         self.relay = relay
         busy = true
+        callFailure = nil
         status = "Checking microphone permission..."
         task = Task {
+            var stage = "Microphone permission"
             do {
                 guard await AudioIO.permission() else { throw VoiceError.microphone }
                 try Task.checkCancellation()
                 guard generation == id else { return }
                 status = "Connecting securely..."
+                stage = "Secure connection"
                 let code = try await relay.connect(invitation) {
                     self.status = "Waiting for your partner (up to two minutes)..."
                 }
@@ -263,12 +267,15 @@ final class CallStore: ObservableObject {
                 guard generation == id else { return }
                 let audio = AudioIO()
                 self.audio = audio
+                stage = "Audio startup"
+                status = "Starting microphone and speaker..."
                 try audio.start()
                 connected = true
                 verification = code
                 status = "Authenticated call. Compare verification codes independently."
                 UIApplication.shared.isIdleTimerDisabled = true
                 observeAudio(id)
+                stage = "Audio streaming"
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask { @MainActor in
                         var lastCapture = ContinuousClock.now
@@ -296,8 +303,18 @@ final class CallStore: ObservableObject {
                 }
                 finish(id, message: "Call ended. Use a new invitation.")
             } catch {
-                let message = (error as? VoiceError)?.errorDescription
-                    ?? "Connection ended. Check relay, token, certificate, and network."
+                guard generation == id else { return }
+                let detail: String
+                if let error = error as? VoiceError {
+                    detail = error.errorDescription ?? "Call ended."
+                } else if let error = error as? AudioStartupError {
+                    detail = error.localizedDescription
+                } else {
+                    let code = (error as NSError).code
+                    detail = "Connection ended (error \(code)). Check relay, token, certificate, and network."
+                }
+                let message = "\(stage): \(detail)"
+                callFailure = message
                 finish(id, message: message)
             }
         }

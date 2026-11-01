@@ -17,6 +17,7 @@ TOKEN = "lobby-store-test-" + "a" * 40
     "mode",
     [
         "approve",
+        "handoff",
         "cancel",
         "reject",
         "disconnect",

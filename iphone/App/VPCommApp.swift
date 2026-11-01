@@ -32,9 +32,12 @@ struct CallView: View {
                     Label("A private line for two", systemImage: "lock.shield.fill").font(.headline)
                     Text("Your relay. End-to-end encrypted audio.").foregroundStyle(.secondary)
                 }
-                LobbyView(lobby: lobby, callBusy: call.busy) {
-                    editing = false
-                    call.openLobby()
+                callControls
+                if !call.busy {
+                    LobbyView(lobby: lobby, callBusy: call.busy) {
+                        editing = false
+                        call.openLobby()
+                    }
                 }
                 Section {
                     Button {
@@ -79,31 +82,6 @@ struct CallView: View {
                     Text("Share privately. Anyone holding the "
                          + "invitation can join as your partner. Use a new one for every call.")
                 }.disabled(call.busy || lobby.active)
-                Section("Call") {
-                    Text(call.status).accessibilityIdentifier("status")
-                    if call.connected {
-                        Text(call.verification).font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                        Button(action: call.mute) {
-                            Label(call.muted ? "Unmute" : "Mute",
-                                  systemImage: call.muted ? "mic.slash.fill" : "mic.fill")
-                        }.accessibilityIdentifier("mute")
-                    }
-                    if call.busy {
-                        Button(role: .destructive) { call.hangUp() } label: {
-                            Label(call.pairing ? "Cancel pairing" : "Hang up",
-                                  systemImage: "phone.down.fill")
-                        }.accessibilityIdentifier("hangUp")
-                    } else {
-                        Button {
-                            editing = false
-                            call.start()
-                        } label: {
-                            Label("Start / Join", systemImage: "phone.fill")
-                        }.accessibilityIdentifier("start")
-                            .disabled(lobby.active || call.address.isEmpty || call.token.isEmpty || call.invitation.isEmpty)
-                    }
-                }
                 Section {
                     if let fingerprint = call.rootFingerprint {
                         Label("Private CA loaded", systemImage: "checkmark.shield")
@@ -139,6 +117,14 @@ struct CallView: View {
             .fileImporter(isPresented: $call.importCertificate, allowedContentTypes: [.data]) {
                 if case .success(let url) = $0 { call.loadCertificate(url) }
             }
+            .alert("Call could not continue", isPresented: Binding(
+                get: { call.callFailure != nil },
+                set: { if !$0 { call.callFailure = nil } }
+            )) {
+                Button("OK") { call.callFailure = nil }
+            } message: {
+                Text(call.callFailure ?? "")
+            }
             .sheet(isPresented: $call.scanningPairing, onDismiss: call.pairingScannerDismissed) {
                 NavigationStack {
                     PairingScanner(scanned: call.scannedPairing, failed: call.pairingScanFailed)
@@ -161,6 +147,37 @@ struct CallView: View {
                      + "This replaces your saved relay. "
                      + (call.rootFingerprint == nil ? "Using standard iOS TLS trust."
                         : "Using your imported private CA. Verify its fingerprint first."))
+            }
+        }
+    }
+
+    private var callControls: some View {
+        Section("Call") {
+            Text(call.status).accessibilityIdentifier("status")
+            if call.busy && !call.connected {
+                ProgressView().accessibilityLabel("Starting secure connection")
+            }
+            if call.connected {
+                Text(call.verification).font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                Button(action: call.mute) {
+                    Label(call.muted ? "Unmute" : "Mute",
+                          systemImage: call.muted ? "mic.slash.fill" : "mic.fill")
+                }.accessibilityIdentifier("mute")
+            }
+            if call.busy {
+                Button(role: .destructive) { call.hangUp() } label: {
+                    Label(call.pairing ? "Cancel pairing" : "Hang up",
+                          systemImage: "phone.down.fill")
+                }.accessibilityIdentifier("hangUp")
+            } else if !lobby.active {
+                Button {
+                    editing = false
+                    call.start()
+                } label: {
+                    Label("Start / Join", systemImage: "phone.fill")
+                }.accessibilityIdentifier("start")
+                    .disabled(call.address.isEmpty || call.token.isEmpty || call.invitation.isEmpty)
             }
         }
     }

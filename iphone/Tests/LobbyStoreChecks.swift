@@ -37,9 +37,28 @@ struct LobbyStoreChecks {
             bob.name = "Bob"
             var aliceInvitation: String?
             var bobInvitation: String?
-            defer { alice.disconnect(); bob.disconnect() }
-            alice.connect(settings) { aliceInvitation = $0 }
-            bob.connect(settings) { bobInvitation = $0 }
+            var calls: [Task<String, Error>] = []
+            let audioA = Relay(settings), audioB = Relay(settings)
+            defer {
+                alice.disconnect(); bob.disconnect()
+                calls.forEach { $0.cancel() }
+                audioA.stop(); audioB.stop()
+            }
+            func handoff(_ relay: Relay, _ text: String) {
+                guard input.mode == "handoff" else { return }
+                // Start directly from the callback, as CallStore does, while the
+                // lobby reader is being canceled and its socket is closing.
+                calls.append(Task { @MainActor in
+                    try Task.checkCancellation()
+                    let code = try await relay.connect(CallInvitation(text), waiting: {})
+                    try await relay.transmit(VoiceProtocol.silence)
+                    let frame = try await relay.listen()
+                    precondition(frame == VoiceProtocol.silence)
+                    return code
+                })
+            }
+            alice.connect(settings) { aliceInvitation = $0; handoff(audioA, $0) }
+            bob.connect(settings) { bobInvitation = $0; handoff(audioB, $0) }
             try await wait { alice.online && bob.online }
             alice.announce()
             try await wait { bob.offers.count == 1 && !alice.sending }
@@ -82,6 +101,13 @@ struct LobbyStoreChecks {
                     } else {
                         try await wait { aliceInvitation != nil && bobInvitation != nil }
                         precondition(aliceInvitation == bobInvitation)
+                        if input.mode == "handoff" {
+                            precondition(calls.count == 2)
+                            let first = try await calls[0].value
+                            let second = try await calls[1].value
+                            precondition(first == second)
+                            audioA.stop(); audioB.stop()
+                        }
                         precondition(!alice.active && !bob.active && !alice.waiting && !bob.waiting)
                         precondition(aliceSaved.trusted.count == 1 && bobSaved.trusted.count == 1)
                         let bobKey = candidate.exchange.request.identity

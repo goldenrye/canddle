@@ -96,6 +96,15 @@ private final class PCMConverter {
     }
 }
 
+struct AudioStartupError: LocalizedError {
+    let stage: String
+    let code: Int
+
+    var errorDescription: String? {
+        "Could not \(stage) (audio error \(code)). Check microphone access and the audio route."
+    }
+}
+
 @MainActor
 final class AudioIO {
     private let engine = AVAudioEngine()
@@ -114,17 +123,21 @@ final class AudioIO {
     }
 
     func start() throws {
+        var stage = "configure the audio session"
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .voiceChat,
                                     options: [.defaultToSpeaker, .allowBluetooth])
             try session.setPreferredSampleRate(48000)
             try session.setPreferredIOBufferDuration(0.02)
+            stage = "activate the audio session"
             try session.setActive(true)
             active = true
             let input = engine.inputNode
+            stage = "enable voice processing"
             try input.setVoiceProcessingEnabled(true)
             let hardware = input.outputFormat(forBus: 0)
+            stage = "configure microphone conversion"
             let converter = try PCMConverter(from: hardware, to: wireFormat, queue: queue)
             input.installTap(onBus: 0, bufferSize: 1024, format: hardware) { buffer, _ in
                 converter.consume(buffer)
@@ -133,11 +146,12 @@ final class AudioIO {
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: wireFormat)
             engine.prepare()
+            stage = "start the audio engine"
             try engine.start()
             player.play()
         } catch {
             stop()
-            throw VoiceError.audio
+            throw AudioStartupError(stage: stage, code: (error as NSError).code)
         }
     }
 
