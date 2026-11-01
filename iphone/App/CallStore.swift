@@ -266,7 +266,9 @@ final class CallStore: ObservableObject {
                                 lastCapture = .now
                                 try await self.lobby.transmit(frame)
                             } else {
-                                guard lastCapture.duration(to: .now) < .seconds(5) else { throw VoiceError.audio }
+                                guard lastCapture.duration(to: .now) < .seconds(5) else {
+                                    throw AudioRuntimeError(detail: "No microphone frames arrived for five seconds.")
+                                }
                                 try await Task.sleep(nanoseconds: 5_000_000)
                             }
                         }
@@ -348,7 +350,7 @@ final class CallStore: ObservableObject {
                                 try await relay.transmit(frame)
                             } else {
                                 guard lastCapture.duration(to: .now) < .seconds(5) else {
-                                    throw VoiceError.audio
+                                    throw AudioRuntimeError(detail: "No microphone frames arrived for five seconds.")
                                 }
                                 try await Task.sleep(nanoseconds: 5_000_000)
                             }
@@ -371,6 +373,8 @@ final class CallStore: ObservableObject {
                 if let error = error as? VoiceError {
                     detail = error.errorDescription ?? "Call ended."
                 } else if let error = error as? AudioStartupError {
+                    detail = error.localizedDescription
+                } else if let error = error as? AudioRuntimeError {
                     detail = error.localizedDescription
                 } else {
                     let code = (error as NSError).code
@@ -454,7 +458,8 @@ final class CallStore: ObservableObject {
     /// Configuring and activating the session (category, voice processing) posts
     /// route changes of its own, delivered after observation starts. Only end the
     /// call for real interruptions, lost devices, or a media services reset; other
-    /// breakage is caught by the engine-running checks and the capture watchdog.
+    /// configuration stops get bounded engine recovery; other breakage is caught
+    /// by the capture watchdog. AudioIO separately gates restart on interruption.
     nonisolated private static func endsCall(_ note: Notification) -> Bool {
         let info = note.userInfo ?? [:]
         switch note.name {

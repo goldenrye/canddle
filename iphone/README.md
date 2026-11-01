@@ -177,7 +177,7 @@ No relay address, access token, invitation, or CA private key is bundled.
 
 - Foreground-only calls. Backgrounding or locking ends the call; the screen
   stays awake during an active call. There is no background-audio entitlement.
-- Audio interruptions, route changes, and audio-service resets end the call.
+- Audio interruptions, removal of an audio device, and audio-service resets end the call.
   Connect your preferred headphones before starting.
 - A brief inactive state obscures the interface but does not alone hang up.
   Transitioning to the background does.
@@ -199,6 +199,25 @@ No relay address, access token, invitation, or CA private key is bundled.
 The client converts device audio to mono 16 kHz PCM16 little-endian, 320 samples
 per 20 ms frame. It uses AVAudioEngine voice processing on supported hardware
 for echo cancellation. Headphones are still recommended.
+
+The microphone tap uses its delivered PCM format, including changes negotiated
+after voice processing starts. A changed sample rate/channel layout rebuilds the
+resampler and discards partial/queued old-format capture without changing network
+keys or counters. Empty startup buffers do not count as conversion failures.
+Engine stops, PCM conversion errors (including numeric codes/format), allocation
+failures, and the capture watchdog have distinct alerts. These contain no audio
+samples, relay credentials, or keys.
+
+The engine is created after session activation. A stopped engine is not immediately
+treated as a hang-up: capture/playback checks rebuild the tap and playback graph
+against the current I/O formats and attempt restart, at most three times per call,
+spaced by 250 ms with a two-second window per stop. While recovering, playback is
+dropped and capture waits; the encrypted connections and mute setting remain.
+Old graph queues are discarded. Interruption, device removal, audio-service loss/
+reset, backgrounding, and explicit shutdown prohibit restart. Exhausting the
+budget ends the call with a distinct error instead of an unlimited retry loop.
+Native tests exercise the recovery policy with a simulated engine; physical
+voice-processing route changes still require device acceptance testing.
 
 Capture and scheduled playback queues are bounded to five frames. Full capture
 queues discard old unsent audio; full playback queues discard incoming audio.
@@ -251,6 +270,12 @@ xcrun swiftc -parse-as-library iphone/Core/*.swift iphone/App/LobbyStore.swift \
   iphone/App/GroupStore.swift iphone/Tests/GroupChecks.swift -o /tmp/vpcomm-group-checks
 VPCOMM_GROUP_PROBE=/tmp/vpcomm-group-checks \
   python -m pytest tests/test_group_server.py iphone/Tests/test_group.py -q
+
+# Actual AVAudioConverter on macOS with synthetic buffers, no microphone access
+xcrun swiftc -parse-as-library iphone/Core/Protocol.swift iphone/App/AudioIO.swift \
+  iphone/Tests/AudioChecks.swift -o /tmp/vpcomm-audio-checks
+VPCOMM_AUDIO_PROBE=/tmp/vpcomm-audio-checks \
+  python -m pytest iphone/Tests/test_audio_native.py -q
 ```
 
 Install the root project's `test` dependencies in your Python environment first.
