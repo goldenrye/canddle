@@ -162,7 +162,7 @@ docker compose exec -T relay vpcomm-pair
 ```
 
 Expand the terminal so the whole QR fits without line wrapping. In the updated
-iPhone app, tap **Pair with QR**, allow camera access, scan, verify the displayed
+iPhone app, open **Settings > Pair with QR**, allow camera access, scan, verify the displayed
 server, and tap **Pair and save**. Generate a separate QR for each phone.
 For private-CA servers, securely import and verify the public CA in the app
 **before** scanning. The QR does not install a CA or bypass certificate checks.

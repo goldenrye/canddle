@@ -188,7 +188,7 @@ it on your iPhone. It supports foreground calls with the desktop client or
 another iPhone, manual invitation sharing, verification codes, mute, hang-up, and
 private-CA certificates.
 
-With the updated relay and app on all phones, **Relay Group** supports
+With the updated relay and app on all phones, the **Calls** screen supports
 **Start call**, foreground banner/sound notifications, **Join call**, and caller
 **Accept / Reject / Ignore** controls. First-time peers independently compare a
 security code; their device keys are remembered in the Keychain. Verified peers

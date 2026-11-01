@@ -34,12 +34,12 @@ Use a relay deployed according to [`../deploy/README.md`](../deploy/README.md).
    `docker compose exec -T relay vpcomm-pair` over authenticated SSH.
 2. For a private-CA server, import its public CA and verify the fingerprint first
    using the TLS instructions below. Publicly trusted servers need no import.
-3. Tap **Pair with QR** and allow camera access. Scan the terminal's QR within
+3. Open **Settings > Pair with QR** and allow camera access. Scan the terminal's QR within
    two minutes. Keep the QR private; whoever redeems it first gets relay access.
 4. Confirm the displayed server is yours, then tap **Pair and save**. The app
    retrieves the token over verified HTTPS and saves the address/token together
    in the device-only Keychain. No invitation or audio is sent during pairing.
-5. Use the call lobby below, or generate a fresh manual invitation.
+5. Return to **Calls** to start a group call or go online to receive calls.
 
 The QR is single-use, contains no permanent token, and does not change certificate
 trust. The app never follows pairing redirects or opens the QR in a browser.
@@ -55,8 +55,8 @@ If the administrator rotates the shared relay token, pair again.
 
 1. Upgrade the relay (`docker compose up -d --build`) and install the updated app
    on every phone. Keep the same WSS address and saved access token.
-2. Under **Relay Group**, set a recognizable device name. Receivers tap
-   **Go online** and keep the app open. The caller taps **Start call**, which
+2. Set a recognizable device name in **Settings**. On **Calls**, receivers tap
+   **Go online to receive calls** and keep the app open. The caller taps **Start call**, which
    connects automatically if needed and announces the call.
 3. Other connected clients receive an in-app banner and a system alert sound
    (subject to device sound settings). A phone connecting later also sees the
@@ -73,8 +73,8 @@ If the administrator rotates the shared relay token, pair again.
    **Participants** can hear and talk. Grant microphone access if prompted.
    The announcement stays open and the caller can accept later joiners while
    talking. Up to **six participants**, including the caller, are supported.
-7. Participants can **Leave call**; the caller can **Remove participant** or
-   **End call for everyone**. The caller must remain connected. If the caller
+7. Participants can **Leave call**; the caller can expand a participant's row to
+   **Remove participant**, or use **End for everyone** in the bottom bar. The caller must remain connected. If the caller
    disconnects, backgrounds, or locks the phone, the whole call ends. Another
    participant leaving does not end the remaining participants' call.
 
@@ -99,32 +99,36 @@ the relay cannot decrypt or mix it. No shared audio invitation needs copying.
 Old two-person lobby clients and desktop clients do not appear in group v2;
 desktop/manual-invitation calling remains compatible on the same server.
 
-Go offline before editing relay/TLS settings or using manual invitations.
+The main screen only shows call actions, relevant requests and participants.
+Mute and leave/end controls stay in a bottom bar during calls. Device keys are
+expandable; unknown-device verification stays visible when approval requires it.
+After confirming a new caller, the requester can still expand **Compare security
+code** to help the caller complete their comparison.
+
+Use **Settings > Go offline** before editing connection settings. Settings are
+unavailable while a call or join request is active; finish or cancel it first.
+**Advanced > Reset saved settings >**
 **Forget verified peers** removes all saved peer trust (up to 100 keys across
-relays) while retaining your own device identity. **Forget saved relay** deletes
+relays) while retaining your own device identity. In the same section, **Forget saved relay** deletes
 the relay address/token, not the separate device identity or peer trust. These
 Keychain entries may survive reinstall, are not synced to iCloud, and are
 accessible only while the device is unlocked. Invitations and ephemeral
 encryption keys are never stored. Failed trust writes prevent confirmation or
 approval, rather than silently treating the peer as verified.
 
-### Manual Setup and Calling
+### Manual Connection Setup
 
-1. Generate an invitation on one client and share it through an authenticated,
-   private channel. Anyone with the invitation secret can impersonate a peer.
-2. On each client, enter the exact relay URL, for example
+1. Open **Settings > Enter connection manually**.
+2. Enter the exact relay URL, for example
    `wss://voice.example.com/relay` or `wss://voice.example.com:8443/relay`.
 3. Enter the relay access token. It is different from the invitation. The
    address and token save automatically and are restored next time.
-4. Paste the same invitation on the other client and tap **Start / Join** on
-   both. The first participant waits up to two minutes.
-5. Compare verification codes through an independent trusted channel. Hang up
-   if they differ.
-6. Use **Mute**, **Unmute**, and **Hang up**. Generate a new invitation next time.
+4. Return to **Calls**. No invitation needs to be generated or pasted.
 
-The microphone opens only after authenticated key exchange and bidirectional
-key confirmation. Comparing the verification code is user-operated, not a
-separate microphone gate.
+The legacy **Start / Join**, **New invitation**, paste and copy controls have been
+removed from the iPhone interface. Legacy transport remains in the codebase for
+compatibility tests; desktop manual calls still work with the relay. The current
+iPhone interface is group-call only.
 
 The address and token are stored together in the iPhone Keychain, accessible
 only while unlocked, without iCloud synchronization or migration to another
@@ -134,25 +138,22 @@ If saving fails, the app displays a warning instead of claiming it was saved.
 Invitations and session keys are never saved. Private CA imports still need to
 be repeated after the app process exits.
 
-Switching apps keeps the saved relay details. An unused invitation stays in
-memory so sharing works. Clipboard
-copies are local-only and expire after two minutes. The app clears its own
-copied invitation when the call ends, without clearing unrelated clipboard
-contents. A recipient app may retain a copy.
+Switching apps keeps saved relay details, but backgrounding ends a group call.
 
 ## TLS and Private Certificates
 
 The app accepts only `wss://` and never bypasses TLS validation. A custom port,
 including 8443, is supported. No App Transport Security exceptions are enabled.
 
-For a normal publicly trusted certificate, leave **TLS certificate** unchanged.
+For a normal publicly trusted certificate, leave certificate trust unchanged.
 
 For the Caddy private-CA deployment:
 
 1. Export the server's **public root certificate** following the deployment
    guide. Never transfer a private key to the iPhone.
 2. Transfer that certificate securely to Files on your phone.
-3. Tap **Import private CA from Files**. Choose one PEM or DER root certificate.
+3. Open **Settings > Advanced > Certificate trust > Choose private CA certificate**.
+   Choose one PEM or DER root certificate.
 4. Verify the displayed SHA-256 fingerprint against a trusted computer:
 
    ```bash

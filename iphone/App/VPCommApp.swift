@@ -24,118 +24,94 @@ struct VPCommApp: App {
 struct CallView: View {
     @ObservedObject var call: CallStore
     @ObservedObject var lobby: GroupStore
-    @FocusState private var editing: Bool
+
+    private var configured: Bool { !call.address.isEmpty && !call.token.isEmpty }
 
     var body: some View {
         NavigationStack {
-            Form {
+            List {
                 Section {
-                    Label("Private group audio", systemImage: "lock.shield.fill").font(.headline)
-                    Text("Your relay. End-to-end encrypted audio.").foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Image(systemName: call.connected ? "waveform" : "lock.shield.fill")
+                            .font(.title2).foregroundStyle(.teal)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(call.connected ? "Encrypted call" : (lobby.online ? "You're online" : "Private group calls"))
+                                .font(.headline)
+                            Text(call.busy ? call.status : lobby.status)
+                                .font(.callout).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("lobbyStatus")
+                        }
+                        if (call.busy && !call.connected) || (lobby.active && !lobby.online) {
+                            ProgressView().accessibilityLabel("Connecting")
+                        }
+                    }.padding(.vertical, 6)
                 }
-                callControls
-                if !call.busy || call.groupAudio {
-                    LobbyView(lobby: lobby, callBusy: call.busy, connect: {
-                        editing = false
-                        call.openLobby()
-                    }, startCall: {
-                        editing = false
-                        call.openLobby(startCall: true)
-                    })
+                if !configured {
+                    Section {
+                        Text("Connect to your server once. Your details will be saved securely.")
+                            .foregroundStyle(.secondary)
+                        NavigationLink {
+                            RelaySettingsView(call: call, lobby: lobby)
+                        } label: {
+                            Label("Set up connection", systemImage: "qrcode.viewfinder")
+                        }.accessibilityIdentifier("setupConnection")
+                    }
+                } else if !call.busy || call.groupAudio {
+                    LobbyView(lobby: lobby, callBusy: call.busy,
+                              connect: { call.openLobby() },
+                              startCall: { call.openLobby(startCall: true) })
                 }
-                Section {
-                    Button {
-                        editing = false
-                        call.scanningPairing = true
-                    } label: {
-                        Label("Pair with QR", systemImage: "qrcode.viewfinder")
-                    }.accessibilityIdentifier("pairQR")
-                    TextField("wss://voice.example.com/relay", text: $call.address)
-                        .keyboardType(.URL).focused($editing)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityIdentifier("address")
-                    SecureField("Relay access token", text: $call.token)
-                        .focused($editing)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityIdentifier("token")
-                    if let error = call.settingsError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                    Button("Forget saved relay", role: .destructive, action: call.forgetRelay)
-                        .accessibilityIdentifier("forgetRelay")
-                } header: {
-                    Text("Relay")
-                } footer: {
-                    Text("Address and token are saved automatically in this iPhone's Keychain. "
-                         + "They are not synced through iCloud.")
-                }.disabled(call.busy || lobby.active)
-                Section {
-                    SecureField("Paste vp1 invitation", text: $call.invitation)
-                        .focused($editing)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityIdentifier("invitation")
-                    HStack {
-                        Button("New invitation", action: call.createInvitation)
-                            .accessibilityIdentifier("newInvitation")
-                        Spacer()
-                        Button("Copy", action: call.copyInvitation).disabled(call.invitation.isEmpty)
-                    }.buttonStyle(.borderless)
-                } header: {
-                    Text("Invitation")
-                } footer: {
-                    Text("Share privately. Anyone holding the "
-                         + "invitation can join as your partner. Use a new one for every call.")
-                }.disabled(call.busy || lobby.active)
-                Section {
-                    if let fingerprint = call.rootFingerprint {
-                        Label("Private CA loaded", systemImage: "checkmark.shield")
-                        Text("SHA-256: \(fingerprint)")
-                            .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                        Button("Use standard iOS trust", action: call.clearCertificate)
-                    } else {
-                        Text("Standard iOS certificate trust").foregroundStyle(.secondary)
-                    }
-                    Button("Import private CA from Files") { call.importCertificate = true }
-                } header: {
-                    Text("TLS certificate")
-                } footer: {
-                    Text("Only needed for a privately issued server certificate. "
-                         + "Import its public root CA and verify the fingerprint independently.")
-                }.disabled(call.busy || lobby.active)
-                Section("Privacy & Limits") {
-                    Text("Keep this app open. Backgrounding, locking, or changing the audio route "
-                         + "ends the call. Saved relay details are kept for your next call.")
-                    Text("Group microphones start after verified caller acceptance. The caller controls "
-                         + "who joins; check the participant list. Verify new device codes through "
-                         + "a trusted channel. Headphones are recommended.")
-                    Text("Experimental protocol, not independently audited. The relay sees IP "
-                         + "addresses and timing. Your partner can record the conversation.")
-                }.font(.footnote).foregroundStyle(.secondary)
             }
-            .navigationTitle("VPComm")
+            .navigationTitle("Calls")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink {
+                        RelaySettingsView(call: call, lobby: lobby)
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }.accessibilityIdentifier("settings")
+                        .disabled(call.busy || lobby.waiting)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if call.busy || lobby.waiting {
+                    HStack(spacing: 16) {
+                        if call.connected {
+                            Button(action: call.mute) {
+                                Label(call.muted ? "Unmute" : "Mute",
+                                      systemImage: call.muted ? "mic.slash.fill" : "mic.fill")
+                            }.accessibilityIdentifier("mute")
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            if call.busy { call.hangUp() }
+                            else { lobby.cancelRequest() }
+                        } label: {
+                            Label(call.pairing ? "Cancel pairing" :
+                                    (lobby.inCall ? (lobby.isCaller ? "End for everyone" : "Leave call") : "Cancel"),
+                                  systemImage: "phone.down.fill")
+                        }.accessibilityIdentifier("hangUp")
+                            .disabled(!call.busy && (lobby.sending || lobby.approving != nil))
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .padding().background(.regularMaterial)
+                }
+            }
             .safeAreaInset(edge: .top) {
                 if let notification = lobby.notification {
                     HStack {
                         Label(notification, systemImage: "bell.badge.fill").font(.callout)
                         Spacer()
-                        Button("Dismiss", action: lobby.dismissNotification)
-                    }
-                    .padding().background(.regularMaterial)
-                    .accessibilityIdentifier("incomingCallBanner")
+                        Button(action: lobby.dismissNotification) {
+                            Image(systemName: "xmark")
+                        }.accessibilityLabel("Dismiss notification")
+                    }.padding().background(.regularMaterial)
+                        .accessibilityIdentifier("incomingCallBanner")
                 }
             }
             .onChange(of: lobby.notificationID) { _ in
                 AudioServicesPlayAlertSound(SystemSoundID(1007))
                 UIAccessibility.post(notification: .announcement, argument: lobby.notification)
-            }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { editing = false }
-                }
-            }
-            .fileImporter(isPresented: $call.importCertificate, allowedContentTypes: [.data]) {
-                if case .success(let url) = $0 { call.loadCertificate(url) }
             }
             .alert("Call could not continue", isPresented: Binding(
                 get: { call.callFailure != nil },
@@ -144,6 +120,108 @@ struct CallView: View {
                 Button("OK") { call.callFailure = nil }
             } message: {
                 Text(call.callFailure ?? "")
+            }
+        }
+    }
+}
+
+struct RelaySettingsView: View {
+    @ObservedObject var call: CallStore
+    @ObservedObject var lobby: GroupStore
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        Group {
+            Form {
+                Section("Your device") {
+                    TextField("Device name", text: $lobby.name)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityIdentifier("lobbyName").focused($editing)
+                        .disabled(call.busy || lobby.active)
+                    if lobby.active {
+                        Text("Go offline before editing connection settings.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Go offline") { lobby.disconnect() }
+                            .disabled(call.busy || lobby.waiting)
+                    }
+                }
+                Section {
+                    Button {
+                        editing = false
+                        call.scanningPairing = true
+                    } label: {
+                        Label("Pair with QR", systemImage: "qrcode.viewfinder")
+                    }.accessibilityIdentifier("pairQR")
+                    DisclosureGroup("Enter connection manually") {
+                        TextField("wss://voice.example.com/relay", text: $call.address)
+                            .keyboardType(.URL).focused($editing)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("address")
+                        SecureField("Relay access token", text: $call.token)
+                            .focused($editing)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("token")
+                    }.accessibilityIdentifier("manualConnection")
+                    if let error = call.settingsError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Connection")
+                } footer: {
+                    Text("Address and token are saved automatically in this iPhone's Keychain. "
+                         + "They are not synced through iCloud.")
+                }.disabled(call.busy || lobby.active)
+                Section("Advanced") {
+                    DisclosureGroup("Certificate trust") {
+                        if let fingerprint = call.rootFingerprint {
+                            Label("Private CA loaded", systemImage: "checkmark.shield")
+                            Text("SHA-256: \(fingerprint)")
+                                .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            Button("Use standard iOS trust", action: call.clearCertificate)
+                        } else {
+                            Text("Standard iOS certificate trust").foregroundStyle(.secondary)
+                        }
+                        Button("Choose private CA certificate") { call.importCertificate = true }
+                            .accessibilityIdentifier("importCA")
+                        Text("Only for privately issued certificates. Verify the public root's fingerprint independently.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    DisclosureGroup("Reset saved settings") {
+                        Button("Forget saved relay", role: .destructive, action: call.forgetRelay)
+                            .accessibilityIdentifier("forgetRelay")
+                        Button("Forget verified peers", role: .destructive, action: lobby.forgetPeers)
+                    }
+                }.disabled(call.busy || lobby.active)
+                Section {
+                    DisclosureGroup("Privacy & limits") {
+                        Text("Keep this app open. Backgrounding, locking, or removing an audio device "
+                             + "ends the call. Saved relay details are kept for your next call.")
+                        Text("Group microphones start after verified caller acceptance. The caller controls "
+                             + "who joins; check the participant list. Verify new device codes through "
+                             + "a trusted channel. Headphones are recommended.")
+                        Text("Experimental protocol, not independently audited. The relay sees IP "
+                             + "addresses and timing. Your partner can record the conversation.")
+                    }.font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Setup status") {
+                    Text(call.status).font(.callout).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("status")
+                    if call.pairing {
+                        ProgressView("Pairing securely")
+                        Button("Cancel pairing", role: .cancel) { call.hangUp() }
+                    }
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { editing = false }
+                }
+            }
+            .fileImporter(isPresented: $call.importCertificate, allowedContentTypes: [.data]) {
+                if case .success(let url) = $0 { call.loadCertificate(url) }
             }
             .sheet(isPresented: $call.scanningPairing, onDismiss: call.pairingScannerDismissed) {
                 NavigationStack {
@@ -171,36 +249,4 @@ struct CallView: View {
         }
     }
 
-    private var callControls: some View {
-        Section("Call") {
-            Text(call.status).accessibilityIdentifier("status")
-            if call.busy && !call.connected {
-                ProgressView().accessibilityLabel("Starting secure connection")
-            }
-            if call.connected {
-                if !call.groupAudio {
-                    Text(call.verification).font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-                Button(action: call.mute) {
-                    Label(call.muted ? "Unmute" : "Mute",
-                          systemImage: call.muted ? "mic.slash.fill" : "mic.fill")
-                }.accessibilityIdentifier("mute")
-            }
-            if call.busy {
-                Button(role: .destructive) { call.hangUp() } label: {
-                    Label(call.pairing ? "Cancel pairing" : "Hang up",
-                          systemImage: "phone.down.fill")
-                }.accessibilityIdentifier("hangUp")
-            } else if !lobby.active {
-                Button {
-                    editing = false
-                    call.start()
-                } label: {
-                    Label("Start / Join", systemImage: "phone.fill")
-                }.accessibilityIdentifier("start")
-                    .disabled(call.address.isEmpty || call.token.isEmpty || call.invitation.isEmpty)
-            }
-        }
-    }
 }

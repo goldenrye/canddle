@@ -14,62 +14,91 @@ final class InterfaceTests: XCTestCase {
         return element
     }
 
-    @MainActor func testInvitationAndInsecureAddress() {
+    @MainActor private func settings(_ app: XCUIApplication) {
+        XCTAssertTrue(app.buttons["settings"].waitForExistence(timeout: 10))
+        app.buttons["settings"].tap()
+        XCTAssertTrue(app.buttons["pairQR"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor private func forget(_ app: XCUIApplication) {
+        button(app, "Reset saved settings").tap()
+        button(app, "forgetRelay").tap()
+    }
+
+    @MainActor func testCompactHomeAndAdvancedSettings() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["lobbyConnect"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.textFields["address"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["pairQR"].exists)
-        button(app, "forgetRelay").tap()
-        XCTAssertFalse(button(app, "start").isEnabled)
-        button(app, "newInvitation").tap()
-        _ = button(app, "start")
-        XCTAssertTrue(app.staticTexts["status"].label.contains("Invitation ready"))
-        button(app, "forgetRelay").swipeDown()
+        XCTAssertTrue(app.buttons["settings"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["settings"].isHittable)
+        XCTAssertFalse(app.textFields["address"].exists)
+        XCTAssertFalse(app.buttons["start"].exists)
+        XCTAssertFalse(app.buttons["newInvitation"].exists)
+        XCTAssertFalse(app.buttons["importCA"].exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        settings(app)
+        XCTAssertFalse(app.buttons["importCA"].exists)
+        button(app, "Certificate trust").tap()
+        XCTAssertTrue(button(app, "importCA").exists)
+    }
+
+    @MainActor func testInsecureAddressShowsActionableAlert() {
+        let app = XCUIApplication()
+        app.launch()
+        settings(app)
+        forget(app)
+        button(app, "Enter connection manually").tap()
         app.textFields["address"].tap()
         app.textFields["address"].typeText("ws://example.com/relay")
         app.secureTextFields["token"].tap()
         app.secureTextFields["token"].typeText(String(repeating: "a", count: 40))
         app.buttons["Done"].tap()
-        button(app, "start").tap()
-        XCTAssertTrue(app.staticTexts["status"].label.contains("Use wss://"))
+        app.navigationBars["Settings"].buttons["Calls"].tap()
+        button(app, "lobbyAnnounce").tap()
+        XCTAssertTrue(app.alerts["Call could not continue"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Use wss://")).firstMatch.exists)
         XCTAssertFalse(app.buttons["hangUp"].exists)
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        button(app, "forgetRelay").tap()
+        app.alerts.buttons["OK"].tap()
+        settings(app)
+        forget(app)
     }
 
     @MainActor func testSavedRelaySurvivesRelaunchAndCanBeForgotten() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["forgetRelay"].waitForExistence(timeout: 10))
-        button(app, "forgetRelay").tap()
+        settings(app)
+        forget(app)
+        button(app, "Enter connection manually").tap()
         app.textFields["address"].tap()
         app.textFields["address"].typeText("wss://example.com:8443/relay")
         app.secureTextFields["token"].tap()
         app.secureTextFields["token"].typeText(String(repeating: "b", count: 40))
         app.buttons["Done"].tap()
-        button(app, "newInvitation").tap()
+        app.navigationBars["Settings"].buttons["Calls"].tap()
         XCUIDevice.shared.press(.home)
         app.activate()
-        XCTAssertTrue(button(app, "start").isEnabled)
+        XCTAssertTrue(button(app, "lobbyAnnounce").isEnabled)
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.textFields["address"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["lobbyAnnounce"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["lobbyAnnounce"].isHittable)
+        XCTAssertTrue(app.buttons["lobbyConnect"].isHittable)
+        XCTAssertFalse(app.textFields["address"].exists)
+        settings(app)
+        button(app, "Enter connection manually").tap()
         XCTAssertEqual(app.textFields["address"].value as? String, "wss://example.com:8443/relay")
-        // Invitations must not persist, while a restored token enables starting
-        // once a fresh invitation is generated. No microphone or network is used.
-        XCTAssertFalse(button(app, "start").isEnabled)
-        button(app, "newInvitation").tap()
-        XCTAssertTrue(button(app, "start").isEnabled)
-        button(app, "forgetRelay").tap()
+        // Restored address and token expose group actions without invitations.
+        // This test never connects to a server or opens the microphone.
+        forget(app)
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.textFields["address"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["setupConnection"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["setupConnection"].isHittable)
+        XCTAssertFalse(app.buttons["lobbyAnnounce"].exists)
+        settings(app)
+        button(app, "Enter connection manually").tap()
         XCTAssertEqual(app.textFields["address"].value as? String, "wss://voice.example.com/relay")
         XCTAssertEqual(app.secureTextFields["token"].value as? String, "Relay access token")
-        button(app, "newInvitation").tap()
-        XCTAssertFalse(button(app, "start").isEnabled)
     }
 }

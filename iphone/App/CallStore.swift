@@ -64,7 +64,7 @@ final class CallStore: ObservableObject {
     @Published var scanningPairing = false
     @Published var pairingTicket: PairingTicket?
     @Published private(set) var pairing = false
-    @Published private(set) var status = "Start a group call, or go online to receive calls. Manual invitations are also available."
+    @Published private(set) var status = "Connection details are saved automatically on this iPhone."
     @Published private(set) var busy = false
     @Published private(set) var connected = false
     @Published private(set) var muted = false
@@ -234,6 +234,7 @@ final class CallStore: ObservableObject {
             lobby.connect(settings, startCall: startCall)
         } catch {
             status = (error as? VoiceError)?.errorDescription ?? "Check relay settings."
+            callFailure = status
         }
     }
 
