@@ -1,12 +1,62 @@
 import AVFoundation
 import Combine
 import Foundation
+import Security
 import UIKit
+
+private struct SavedRelay: Codable {
+    let address: String
+    let token: String
+
+    private static var query: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "VPComm") + ".relay",
+            kSecAttrAccount as String: "saved-relay",
+            kSecAttrSynchronizable as String: false
+        ]
+    }
+
+    static func load() throws -> SavedRelay? {
+        var request = query
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        return try JSONDecoder().decode(SavedRelay.self, from: data)
+    }
+
+    func save() throws {
+        let values: [String: Any] = [
+            kSecValueData as String: try JSONEncoder().encode(self),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        var status = SecItemUpdate(Self.query as CFDictionary, values as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(Self.query.merging(values) { _, new in new } as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+    }
+
+    static func remove() throws {
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+    }
+}
 
 @MainActor
 final class CallStore: ObservableObject {
-    @Published var address = ""
-    @Published var token = ""
+    @Published var address = "" { didSet { saveRelay() } }
+    @Published var token = "" { didSet { saveRelay() } }
+    @Published private(set) var settingsError: String?
     @Published var invitation = ""
     @Published var importCertificate = false
     @Published private(set) var status = "Create an invitation or paste one from your partner."
@@ -22,12 +72,49 @@ final class CallStore: ObservableObject {
     private var generation = UUID()
     private var observers: [NSObjectProtocol] = []
     private var clipboardValue: String?
+    private var clearingRelay = false
+
+    init() {
+        do {
+            if let saved = try SavedRelay.load() {
+                address = saved.address
+                token = saved.token
+            }
+        } catch {
+            settingsError = "Could not read the saved relay. Unlock your iPhone and reopen the app."
+        }
+    }
+
+    private func saveRelay() {
+        guard !clearingRelay else { return }
+        do {
+            try SavedRelay(address: address, token: token).save()
+            settingsError = nil
+        } catch {
+            settingsError = "Could not save relay details securely. Your edits are only in memory."
+        }
+    }
+
+    func forgetRelay() {
+        guard !busy else { return }
+        do {
+            try SavedRelay.remove()
+            clearingRelay = true
+            address = ""
+            token = ""
+            clearingRelay = false
+            settingsError = nil
+            status = "Saved relay forgotten."
+        } catch {
+            settingsError = "Could not delete the saved relay. Unlock your iPhone and try again."
+        }
+    }
 
     func createInvitation() {
         guard !busy else { return }
         do {
             invitation = try CallInvitation.generate().text
-            status = "Invitation ready. Share privately before entering your relay token."
+            status = "Invitation ready. Share it privately with your partner."
         } catch { status = "Could not generate a secure invitation." }
     }
 
@@ -145,7 +232,6 @@ final class CallStore: ObservableObject {
 
     func background() {
         hangUp("Call ended because VPComm left the foreground.")
-        token = ""
         // Unused invitations remain in memory so switching apps to share them works.
     }
 

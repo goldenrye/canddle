@@ -31,7 +31,7 @@ struct CallView: View {
                     Label("A private line for two", systemImage: "lock.shield.fill").font(.headline)
                     Text("Your relay. End-to-end encrypted audio.").foregroundStyle(.secondary)
                 }
-                Section("Relay") {
+                Section {
                     TextField("wss://voice.example.com/relay", text: $call.address)
                         .keyboardType(.URL).focused($editing)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -40,6 +40,16 @@ struct CallView: View {
                         .focused($editing)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("token")
+                    if let error = call.settingsError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                    Button("Forget saved relay", role: .destructive, action: call.forgetRelay)
+                        .accessibilityIdentifier("forgetRelay")
+                } header: {
+                    Text("Relay")
+                } footer: {
+                    Text("Address and token are saved automatically in this iPhone's Keychain. "
+                         + "They are not synced through iCloud.")
                 }.disabled(call.busy)
                 Section {
                     SecureField("Paste vp1 invitation", text: $call.invitation)
@@ -55,7 +65,7 @@ struct CallView: View {
                 } header: {
                     Text("Invitation")
                 } footer: {
-                    Text("Share privately before entering the relay token. Anyone holding the "
+                    Text("Share privately. Anyone holding the "
                          + "invitation can join as your partner. Use a new one for every call.")
                 }.disabled(call.busy)
                 Section("Call") {
@@ -100,7 +110,7 @@ struct CallView: View {
                 }.disabled(call.busy)
                 Section("Privacy & Limits") {
                     Text("Keep this app open. Backgrounding, locking, or changing the audio route "
-                         + "ends the call. Backgrounding also clears the relay token.")
+                         + "ends the call. Saved relay details are kept for your next call.")
                     Text("Microphone capture starts after peer key confirmation. Compare the "
                          + "verification codes through a trusted channel. Headphones are recommended.")
                     Text("Experimental protocol, not independently audited. The relay sees IP "

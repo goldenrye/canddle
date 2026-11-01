@@ -30,7 +30,8 @@ Use a relay deployed according to [`../deploy/README.md`](../deploy/README.md).
    private channel. Anyone with the invitation secret can impersonate a peer.
 2. On each client, enter the exact relay URL, for example
    `wss://voice.example.com/relay` or `wss://voice.example.com:8443/relay`.
-3. Enter the relay access token. It is different from the invitation.
+3. Enter the relay access token. It is different from the invitation. The
+   address and token save automatically and are restored next time.
 4. Paste the same invitation on the other client and tap **Start / Join** on
    both. The first participant waits up to two minutes.
 5. Compare verification codes through an independent trusted channel. Hang up
@@ -41,8 +42,16 @@ The microphone opens only after authenticated key exchange and bidirectional
 key confirmation. Comparing the verification code is user-operated, not a
 separate microphone gate.
 
-Generate/share the invitation before entering the token: switching apps clears
-the token. An unused invitation stays in memory so sharing works. Clipboard
+The address and token are stored together in the iPhone Keychain, accessible
+only while unlocked, without iCloud synchronization or migration to another
+device. Use **Forget saved relay** to delete them. Keychain data may survive
+app deletion, so explicitly forget it before removing the app when needed.
+If saving fails, the app displays a warning instead of claiming it was saved.
+Invitations and session keys are never saved. Private CA imports still need to
+be repeated after the app process exits.
+
+Switching apps keeps the saved relay details. An unused invitation stays in
+memory so sharing works. Clipboard
 copies are local-only and expire after two minutes. The app clears its own
 copied invitation when the call ends, without clearing unrelated clipboard
 contents. A recipient app may retain a copy.
@@ -89,8 +98,9 @@ No relay address, access token, invitation, or CA private key is bundled.
 - A brief inactive state obscures the interface but does not alone hang up.
   Transitioning to the background does.
 - No CallKit, APNs, background ringing, contacts, automatic reconnect, or accounts.
-- No app-managed recording, analytics, cloud storage, or credential persistence.
-  Credentials and session keys exist in memory; secure memory erasure is not
+- No app-managed recording, analytics, or cloud storage. Relay details persist
+  in the device-only Keychain; invitations and session keys exist only in memory.
+  Secure memory erasure is not
   guaranteed. OS diagnostics, clipboard recipients, or compromised devices
   remain outside these protections.
 - End-to-end encryption uses the project's existing experimental protocol.
@@ -141,8 +151,12 @@ Interop tests are skipped unless `VPCOMM_IPHONE_PROBE` is set. The probe reads
 test credentials from stdin rather than command-line arguments.
 
 Run the UI test with Command-U in Xcode using an installed iPhone simulator.
-It checks invitation creation and insecure-address rejection. Test outputs and
+It checks invitation creation, insecure-address rejection, saved relay restoration
+after relaunch/backgrounding, and deletion. Test outputs and
 builds should live outside the repository, using `-derivedDataPath /tmp/...`.
+UI tests require signing for Keychain access. For command-line simulator tests,
+use `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` (local ad-hoc signing), not
+the unsigned build-only setting above.
 
 Verification covers real Swift-to-Python key exchange and encrypted PCM in both
 directions, matching verification codes, private-CA TLS, rejection of expired/
