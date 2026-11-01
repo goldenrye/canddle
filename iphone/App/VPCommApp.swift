@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AudioToolbox
 
 @main
 struct VPCommApp: App {
@@ -22,22 +23,25 @@ struct VPCommApp: App {
 
 struct CallView: View {
     @ObservedObject var call: CallStore
-    @ObservedObject var lobby: LobbyStore
+    @ObservedObject var lobby: GroupStore
     @FocusState private var editing: Bool
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Label("A private line for two", systemImage: "lock.shield.fill").font(.headline)
+                    Label("Private group audio", systemImage: "lock.shield.fill").font(.headline)
                     Text("Your relay. End-to-end encrypted audio.").foregroundStyle(.secondary)
                 }
                 callControls
-                if !call.busy {
-                    LobbyView(lobby: lobby, callBusy: call.busy) {
+                if !call.busy || call.groupAudio {
+                    LobbyView(lobby: lobby, callBusy: call.busy, connect: {
                         editing = false
                         call.openLobby()
-                    }
+                    }, startCall: {
+                        editing = false
+                        call.openLobby(startCall: true)
+                    })
                 }
                 Section {
                     Button {
@@ -101,13 +105,29 @@ struct CallView: View {
                 Section("Privacy & Limits") {
                     Text("Keep this app open. Backgrounding, locking, or changing the audio route "
                          + "ends the call. Saved relay details are kept for your next call.")
-                    Text("Microphone capture starts after peer key confirmation. Compare the "
-                         + "verification codes through a trusted channel. Headphones are recommended.")
+                    Text("Group microphones start after verified caller acceptance. The caller controls "
+                         + "who joins; check the participant list. Verify new device codes through "
+                         + "a trusted channel. Headphones are recommended.")
                     Text("Experimental protocol, not independently audited. The relay sees IP "
                          + "addresses and timing. Your partner can record the conversation.")
                 }.font(.footnote).foregroundStyle(.secondary)
             }
             .navigationTitle("VPComm")
+            .safeAreaInset(edge: .top) {
+                if let notification = lobby.notification {
+                    HStack {
+                        Label(notification, systemImage: "bell.badge.fill").font(.callout)
+                        Spacer()
+                        Button("Dismiss", action: lobby.dismissNotification)
+                    }
+                    .padding().background(.regularMaterial)
+                    .accessibilityIdentifier("incomingCallBanner")
+                }
+            }
+            .onChange(of: lobby.notificationID) { _ in
+                AudioServicesPlayAlertSound(SystemSoundID(1007))
+                UIAccessibility.post(notification: .announcement, argument: lobby.notification)
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -158,8 +178,10 @@ struct CallView: View {
                 ProgressView().accessibilityLabel("Starting secure connection")
             }
             if call.connected {
-                Text(call.verification).font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
+                if !call.groupAudio {
+                    Text(call.verification).font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                }
                 Button(action: call.mute) {
                     Label(call.muted ? "Unmute" : "Mute",
                           systemImage: call.muted ? "mic.slash.fill" : "mic.fill")

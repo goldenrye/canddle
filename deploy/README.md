@@ -201,10 +201,11 @@ of 20 burst / 2 per second; this bounds attempts but cannot prevent denial of
 service. If pairing fails after redemption (lost response, cancellation, or
 Keychain failure), generate a new QR. Codes are deliberately not reusable.
 
-## Foreground Call Lobby
+## Foreground Group Calls
 
-The updated iPhone client supports **Go online**, **New call**, **Request to join**,
-and explicit caller approval, without copying invitations. Upgrade the server:
+The updated iPhone client supports **Start call**, **Join call**, caller
+**Accept / Reject / Ignore**, and up to six participants including later joiners.
+Upgrade the server and install the updated app on every participating iPhone:
 
 ```bash
 docker compose up -d --build
@@ -216,23 +217,34 @@ variable, or paid service is required. Old desktop/manual-invitation calls still
 work. Both iPhones must install the updated app and remain in the foreground.
 An old server will reject lobby registration; update it before using the feature.
 
-All connected lobby clients receive announcements, but only the caller-approved
-requester receives the end-to-end encrypted invitation. First-time peers must
-compare the full security code independently before confirming/approving.
-The relay access token does not establish a person's identity.
+All connected group v2 clients receive announcements with an in-app banner/sound,
+but only caller-accepted members receive authenticated pairwise audio links.
+First-time peers compare security codes independently. Returning verified peers
+need only tap Join call and wait for Accept. No copy/paste invitation is needed.
+The caller's announcement stays open for later joins; caller departure ends the
+group. Other members may leave or be removed without ending everyone else's call.
+One relay/token is one announcement group. Separate instances are needed for
+separately managed groups; the shared token is not proof of personal identity.
 
 The server retains only transient signaling data in RAM. It sees device public
-keys, names, announcements, request/approval metadata, and encrypted invitation
-boxes, never the plaintext invitation. Do not enable WebSocket frame logging.
+keys, names, announcements, signed participant lists and encrypted pairwise audio,
+never plaintext audio. Do not enable WebSocket frame logging.
 Restart clears all pending offers and requests. Run one relay replica.
 
-Limits: the existing connection budget is shared by calls and lobby sockets;
-one pending offer or outgoing request per device; at most 16 requests per offer;
-two-minute offers; one-hour lobby sessions; 1024-byte messages; 64 queued outbound
-messages per peer; three-second sends; and a 12-message burst / 2-per-second
-incoming budget. Idle clients send application heartbeats every 15 seconds and
-are disconnected after 45 seconds without messages. These limits do not stop
-network floods or a token holder from disrupting the lobby.
+Limits: one persistent socket per group client, sharing the existing connection
+budget; six admitted members per call; one pending offer/outgoing request per
+device; 16 pending requests per offer; two-minute unanswered offers and individual
+requests; one-hour connected sessions. First acceptance keeps an offer available
+for the call. Group text messages are bounded to 8192 bytes and media to 705 bytes.
+Outbound queues hold 64 messages, sends time out in three seconds. Control rate
+is burst 12 / refill 2 per second; media rate is burst 600 / refill 300 per second
+per client. Heartbeats run every 15 seconds; inactivity timeout is 45 seconds.
+These are bounds, not measured performance guarantees or DDoS protection.
+
+Group v2, old two-person lobby, and manual calls coexist, but have separate
+discovery/state. An old client cannot join group v2. No Caddy changes are needed
+if `/relay` is already proxied. Microphone/speaker tests on physical phones are
+required before deployment. The media protocol is experimental, not MLS or audited.
 
 The lobby does not use APNs/PushKit: locked or backgrounded iPhones do not ring.
 See [`../iphone/README.md`](../iphone/README.md) for peer verification and usage.
@@ -259,8 +271,10 @@ command: ["vpcomm-server", "--host", "0.0.0.0", "--max-connections", "8",
           "--wait-timeout", "120", "--call-timeout", "1800"]
 ```
 
-The service permits two participants per room. Once one leaves, both sockets
-close. Relay state is in memory, so run **one replica**. Multiple replicas need
+Manual rooms permit two participants and close when one leaves; group v2 permits
+six and stays open until the caller leaves or its session expires. The command's
+wait/call timeout flags apply to manual rooms; group limits are described above.
+Relay state is in memory, so run **one replica**. Multiple replicas need
 explicit room routing; adding replicas blindly can separate participants.
 
 The relay bounds admitted connections, frame size/rate, queues, send time,
@@ -277,15 +291,20 @@ transfer; a domain registrar may bill domain registration. Review current
 regional pricing and your own account terms. An Elastic IP can also incur
 charges. Do not assume a free tier covers this.
 
-One two-person call causes roughly 240 MB/hour of relay audio egress before
+One manual two-person call causes roughly 240 MB/hour of relay audio egress before
 transport overhead. PCM is deliberately simple but costly compared with Opus.
 For long calls, compression should be prioritized in the next stage.
+Group v2 uses about 127 MB/hour per directed pair, or 3.81 GB/hour for a six-person
+call (30 directed pairs), before WebSocket/TLS/TCP overhead. Each phone sends and
+receives approximately 1.41 Mbit/s at six participants.
 
 ## Release Checklist
 
 - Confirm `pytest`, Ruff checks, and image build on the deployment platform.
 - Confirm `/healthz`, valid TLS, and rejection of the wrong relay token.
 - Make a two-computer call across different networks and check both directions.
+- Test 3-6 updated iPhones: all-to-all audio, later joins, reject/ignore,
+  removal/rejoin, microphone permission, foreground notifications, and caller exit.
 - Verify mute, hang-up, microphone permission denial, waiting timeout, and
   network interruption.
 - Confirm security-group rules and that 8765 is not published.

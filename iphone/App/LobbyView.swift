@@ -1,38 +1,59 @@
 import SwiftUI
 
 struct LobbyView: View {
-    @ObservedObject var lobby: LobbyStore
+    @ObservedObject var lobby: GroupStore
     let callBusy: Bool
     let connect: () -> Void
+    let startCall: () -> Void
 
     var body: some View {
         Section {
             Text(lobby.status).font(.callout).accessibilityIdentifier("lobbyStatus")
+            if let notification = lobby.notification {
+                Label(notification, systemImage: "bell.badge.fill")
+                    .foregroundStyle(.blue).accessibilityIdentifier("groupNotification")
+                Button("Dismiss notification", action: lobby.dismissNotification)
+            }
             if !lobby.active {
                 TextField("Device name", text: $lobby.name)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .accessibilityIdentifier("lobbyName")
                 Button("Go online", action: connect).accessibilityIdentifier("lobbyConnect")
                     .disabled(callBusy)
+                Button("Start call", action: startCall).disabled(callBusy)
                 Button("Forget verified peers", role: .destructive, action: lobby.forgetPeers)
                     .disabled(callBusy)
             } else {
                 Button("Go offline", role: .cancel) { lobby.disconnect() }
                 if lobby.online && !lobby.waiting {
-                    Button("New call", action: lobby.announce)
+                    Button("Start call", action: lobby.announce)
                         .accessibilityIdentifier("lobbyAnnounce").disabled(lobby.sending)
                     ForEach(lobby.offers) { offer in
                         VStack(alignment: .leading, spacing: 8) {
                             peer(offer.identity, name: offer.name)
-                            Button("Request to join") { lobby.request(offer) }
+                            Button("Join call") { lobby.request(offer) }
                                 .disabled(lobby.sending)
                         }
                     }
                 }
+                if !lobby.members.isEmpty {
+                    Text("Participants (\(lobby.members.count)/6)").font(.headline)
+                    ForEach(lobby.members) { member in
+                        VStack(alignment: .leading) {
+                            Text(member.id == lobby.ownIdentity ? "\(member.name) (you)" : member.name)
+                            Text("Key: \(LobbyProtocol.fingerprint(member.id))")
+                                .font(.system(.caption, design: .monospaced))
+                            if lobby.isCaller && member.id != lobby.ownIdentity {
+                                Button("Remove participant", role: .destructive) { lobby.remove(member) }
+                                    .disabled(lobby.sending || lobby.approving != nil)
+                            }
+                        }
+                    }
+                }
                 if lobby.ownOffer != nil {
-                    Text(lobby.candidates.isEmpty ? "Waiting for join requests" : "Join requests")
+                    Text(lobby.visibleCandidates.isEmpty ? "Waiting for join requests" : "Join requests")
                         .font(.headline)
-                    ForEach(lobby.candidates) { candidate in
+                    ForEach(lobby.visibleCandidates) { candidate in
                         VStack(alignment: .leading, spacing: 10) {
                             peer(candidate.exchange.request.identity, name: candidate.exchange.request.name)
                             verification(candidate.exchange, identity: candidate.exchange.request.identity)
@@ -40,15 +61,16 @@ struct LobbyView: View {
                                  : "Waiting for the peer to verify you and confirm.")
                                 .font(.caption).foregroundStyle(.secondary)
                             Button(lobby.trustedName(candidate.exchange.request.identity) == nil
-                                   ? "Codes match: verify and approve" : "Approve and start call") {
+                                   ? "Codes match: verify and accept" : "Accept") {
                                 lobby.approve(candidate)
-                            }.disabled(!candidate.confirmed || lobby.sending || lobby.approving != nil)
+                            }.disabled(!candidate.confirmed || lobby.sending || lobby.approving != nil || lobby.members.count >= 6)
                             Button("Reject", role: .destructive) { lobby.reject(candidate) }
                                 .disabled(lobby.sending || lobby.approving != nil)
+                            Button("Ignore") { lobby.ignore(candidate) }
                         }.padding(.vertical, 8)
                     }
                 }
-                if let exchange = lobby.joining {
+                if let exchange = lobby.joining, !lobby.inCall {
                     VStack(alignment: .leading, spacing: 10) {
                         peer(exchange.offer.identity, name: exchange.offer.name)
                         verification(exchange, identity: exchange.offer.identity)
@@ -61,16 +83,18 @@ struct LobbyView: View {
                     }
                 }
                 if lobby.waiting {
-                    Button("Cancel call request", role: .cancel, action: lobby.cancelRequest)
+                    Button(lobby.inCall ? (lobby.isCaller ? "End call for everyone" : "Leave call") : "Cancel call request",
+                           role: .cancel, action: lobby.cancelRequest)
                         .disabled(lobby.sending || lobby.approving != nil)
                 }
             }
         } header: {
-            Text("Call Lobby")
+            Text("Relay Group")
         } footer: {
             Text("Keep both apps open. No locked-screen or background notifications. "
                  + "Announcements are visible to everyone online on this relay. "
-                 + "After both sides confirm, caller approval starts the microphone and call.")
+                 + "Caller acceptance starts audio. First-time devices compare codes once. "
+                 + "The caller controls membership and must stay connected. Up to six participants.")
         }
     }
 

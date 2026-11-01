@@ -16,6 +16,7 @@ from http import HTTPStatus
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+from .group import GroupLobby
 from .lobby import Lobby
 from .pairing import PairingCodes, admin_socket
 
@@ -52,6 +53,7 @@ class Relay:
         self.connections = 0
         self.pairing = pairing
         self.lobby = Lobby()
+        self.group = GroupLobby()
 
     def authorize(self, connection, request):
         if request.path == "/pair":
@@ -107,6 +109,9 @@ class Relay:
             if not isinstance(raw, str) or len(raw) > 128:
                 raise ValueError("Invalid join")
             request = json.loads(raw)
+            if request == {"v": 2, "group": True}:
+                await self.group.handle(socket)
+                return
             if request == {"v": 1, "lobby": True}:
                 await self.lobby.handle(socket)
                 return
@@ -181,7 +186,7 @@ def build_server(relay: Relay, host: str, port: int):
         host,
         port,
         process_request=relay.authorize,
-        max_size=1024,
+        max_size=8192,
         max_queue=4,
         write_limit=8192,
         compression=None,

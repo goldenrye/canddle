@@ -54,7 +54,7 @@ private struct SavedRelay: Codable {
 
 @MainActor
 final class CallStore: ObservableObject {
-    let lobby = LobbyStore()
+    let lobby = GroupStore()
     @Published var address = "" { didSet { saveRelay() } }
     @Published var token = "" { didSet { saveRelay() } }
     @Published private(set) var settingsError: String?
@@ -64,10 +64,11 @@ final class CallStore: ObservableObject {
     @Published var scanningPairing = false
     @Published var pairingTicket: PairingTicket?
     @Published private(set) var pairing = false
-    @Published private(set) var status = "Create an invitation or paste one from your partner."
+    @Published private(set) var status = "Start a group call, or go online to receive calls. Manual invitations are also available."
     @Published private(set) var busy = false
     @Published private(set) var connected = false
     @Published private(set) var muted = false
+    @Published private(set) var groupAudio = false
     @Published private(set) var verification = ""
     @Published private(set) var rootFingerprint: String?
     private var root: Data?
@@ -81,6 +82,12 @@ final class CallStore: ObservableObject {
     private var scannedQR: String?
 
     init() {
+        lobby.onAudioReady = { [weak self] in self?.startGroupAudio() }
+        lobby.onAudioEnded = { [weak self] message in
+            guard let self, self.groupAudio else { return }
+            self.task?.cancel()
+            self.finish(self.generation, message: message)
+        }
         do {
             if let saved = try SavedRelay.load() {
                 address = saved.address
@@ -220,17 +227,73 @@ final class CallStore: ObservableObject {
         status = "Using standard iOS certificate trust."
     }
 
-    func openLobby() {
+    func openLobby(startCall: Bool = false) {
         guard !busy else { return }
         do {
             let settings = try RelaySettings(address: address, token: token, root: root)
-            lobby.connect(settings) { [weak self] invitation in
-                guard let self, !self.busy else { return }
-                self.invitation = invitation
-                self.start()
-            }
+            lobby.connect(settings, startCall: startCall)
         } catch {
             status = (error as? VoiceError)?.errorDescription ?? "Check relay settings."
+        }
+    }
+
+    private func startGroupAudio() {
+        guard !busy else { return }
+        let id = UUID()
+        generation = id
+        groupAudio = true
+        busy = true
+        callFailure = nil
+        status = "Accepted. Checking microphone permission..."
+        task = Task {
+            do {
+                guard await AudioIO.permission() else { throw VoiceError.microphone }
+                try Task.checkCancellation()
+                guard generation == id, lobby.inCall else { return }
+                let audio = AudioIO()
+                self.audio = audio
+                status = "Starting group microphone and speaker..."
+                try audio.start()
+                connected = true
+                status = "Encrypted group audio. Everyone listed can hear and speak."
+                UIApplication.shared.isIdleTimerDisabled = true
+                observeAudio(id)
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask { @MainActor in
+                        var lastCapture = ContinuousClock.now
+                        while !Task.isCancelled {
+                            if let frame = try audio.nextFrame() {
+                                lastCapture = .now
+                                try await self.lobby.transmit(frame)
+                            } else {
+                                guard lastCapture.duration(to: .now) < .seconds(5) else { throw VoiceError.audio }
+                                try await Task.sleep(nanoseconds: 5_000_000)
+                            }
+                        }
+                        throw CancellationError()
+                    }
+                    group.addTask { @MainActor in
+                        let clock = ContinuousClock()
+                        var next = clock.now
+                        while !Task.isCancelled {
+                            try audio.play(self.lobby.mixedFrame())
+                            next = max(next.advanced(by: .milliseconds(20)), clock.now)
+                            try await clock.sleep(until: next)
+                        }
+                        throw CancellationError()
+                    }
+                    defer { group.cancelAll() }
+                    try await group.next()
+                }
+            } catch {
+                guard generation == id else { return }
+                let message = (error as? LocalizedError)?.errorDescription
+                    ?? "Group audio failed (error \((error as NSError).code))."
+                callFailure = message
+                // Disconnect also revokes this participant and closes a caller's group.
+                lobby.disconnect(message)
+                if generation == id { finish(id, message: message) }
+            }
         }
     }
 
@@ -328,6 +391,10 @@ final class CallStore: ObservableObject {
 
     func hangUp(_ message: String = "Call ended. Use a new invitation.") {
         guard busy else { return }
+        if groupAudio {
+            lobby.disconnect("You left the group call. Go online to receive calls again.")
+            return
+        }
         task?.cancel()
         finish(generation, message: message)
     }
@@ -355,6 +422,7 @@ final class CallStore: ObservableObject {
         busy = false
         pairing = false
         connected = false
+        groupAudio = false
         muted = false
         verification = ""
         invitation = ""

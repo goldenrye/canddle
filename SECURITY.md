@@ -2,8 +2,9 @@
 
 ## Intended Protection
 
-The intent is audio-content confidentiality and integrity between two trusted
-desktop installations, even when the relay or network is untrusted. The relay
+The intent is audio-content confidentiality and integrity between trusted
+installations, even when the relay or network is untrusted. Manual calls support
+two participants; native iPhone group calls support up to six. The relay
 terminates TLS but receives only end-to-end ciphertext after the handshake.
 TLS remains necessary to protect relay credentials and reduce exposure of
 room identifiers and handshake metadata to network observers.
@@ -24,7 +25,7 @@ for high-sensitivity use.
 - Sharing an invitation in a messenger transfers trust to that messenger for
   that call's initial authentication. For stronger assurance, exchange it in
   person or over an already authenticated encrypted channel.
-- The audio protocol uses group-secret authentication for a group of two. The
+- The manual audio protocol uses group-secret authentication for a group of two. The
   optional iPhone lobby adds verified device-key authentication for invitation
   delivery, not proof of a person's real-world identity. A relay token is not a peer identity.
 - Compare the session verification code through an independent trusted channel.
@@ -111,8 +112,9 @@ Global pairing rate limiting is not DDoS protection.
 - Server TLS certificates are validated with hostname verification. `--ca`
   chooses a private trust root; there is no insecure/skip-validation option.
 - Client proxy auto-discovery is disabled. No external media service is called.
-- WebSocket compression is disabled, frames are at most 1024 bytes at the
-  relay, and relay payloads must be binary after the initial join.
+- WebSocket compression is disabled. The transport receive ceiling is 8192 bytes
+  for group rosters; manual room frames and legacy lobby frames remain limited
+  to 1024 bytes by their handlers. Manual room payloads must be binary after join.
 - Initial join: `{"v":1,"room":"<room identifier>"}` as a text frame.
 - Relay responses are `{"type":"waiting"}` followed by `{"type":"ready"}`, or
   just `{"type":"ready"}` for the second participant.
@@ -123,7 +125,10 @@ Global pairing rate limiting is not DDoS protection.
 - Browser-originated WebSocket requests are rejected. The protocol is for a
   locally installed native client, not a web page.
 
-### Foreground Lobby
+### Legacy Two-Person Lobby
+
+This v1 path is retained for older clients and regression tests. The current
+iPhone app uses group v2, specified next, not this single-winner flow.
 
 The native iPhone lobby starts with `{"v":1,"lobby":true}` instead of a room join
 on the same bearer-authenticated `/relay` WebSocket. Lobby frames are text JSON,
@@ -222,7 +227,125 @@ is no server-side contact list or per-device access revocation; possession of
 the shared token permits lobby access. Removing peer trust is distinct from
 revoking relay access. Protect the token and rotate it if compromised.
 
-## Authenticated Key Exchange
+### Foreground Group Calls (v2)
+
+The new iPhone UI uses `{"v":2,"group":true}` on the same authenticated `/relay`
+endpoint. Legacy lobby and group discovery are separate. No extra port or
+database is required. One relay/token defines one announcement group; this is
+not a fine-grained group-membership directory or per-device authorization system.
+Any token holder may discover calls or request admission. Callers must verify
+unknown device identities and explicitly accept each participant.
+
+Registration, offers, requests, first-time code comparison and confirmation
+HMAC reuse the v1 signed transcripts described above. No v1 invitation or
+`approve` ciphertext is generated for group calls. On a known caller, tapping
+**Join call** automatically sends the confirmation proof after the signed request.
+Unknown callers still require independent code comparison and a one-time explicit
+confirmation. The host verifies the HMAC and saves verified trust before Accept.
+Reject removes the pending request; Ignore hides it locally until its two-minute
+expiry. Neither permits access.
+
+**Membership authority:** all participants trust the independently verified
+caller to choose other members. This is a caller-controlled group, not consensus,
+distributed administration, MLS, or individually verified full-mesh contacts.
+Every phone displays the current authorized participants and public-key
+fingerprints. Caller departure ends the call; there is no host migration.
+As with any authorized endpoint, a malicious caller can record or forward audio.
+
+On each acceptance, removal or departure the caller creates a signed roster:
+
+```text
+{
+  "type": "roster", "call": callID, "revision": decimalUInt64,
+  "epoch": base64url(32 random bytes),
+  "members": JSON string containing an array of original offer/request objects,
+  "signature": base64url(Ed25519 signature)
+}
+
+binding = T("group-roster", callID, revision, epoch, membersString)
+signature = Ed25519.sign(callerSigningKey, binding)
+```
+
+The exact members string is signed, avoiding cross-language JSON canonicalization.
+There must be one unchanged caller offer and up to five distinct signed requests
+bound to it. Clients verify every entry's signature and the caller signature,
+and check their own entry against their locally generated offer/request.
+The caller accepts only its exact outstanding proposal echoed by the server.
+An existing member requires revision + 1; a newly admitted member can enter at a
+later revision. Non-increasing revisions fail closed. The honest server requires
+the owner socket, unchanged existing entries, at most one new confirmed request,
+and at most six members. The full decision is validated before mutating state.
+A request that disappeared during approval produces a retry without admission.
+Removing a member sends them the signed exclusion and immediately disables
+their server routing. Disconnects pause media until a caller-signed update.
+
+**Pairwise keys:** every call participant has a fresh X25519 ephemeral private
+key corresponding to their signed offer/request. For each distinct pair, sort
+their canonical base64url signing-key identity strings lexicographically (ASCII):
+
+```text
+context = T("group-media", smallerIdentity, largerIdentity) || binding
+digest = SHA256(context)
+material = HKDF-SHA256(
+    X25519(ownEphemeralPrivate, peerEphemeralPublic),
+    salt=digest, info=context, length=64)
+```
+
+The smaller identity sends with material[0:32] and receives with material[32:64];
+the larger uses the reverse. Group media reuses `CallKeys` AES-256-GCM counter
+framing with `digest` as the authenticated binding, but starts audio at counter
+zero (there is no v1 room confirmation message). Signed keys, the requester's
+ephemeral-possession proof to the host, verified host authority, and the signed
+roster authenticate admission. After accepting the roster the app opens the
+microphone; acceptance does not guarantee every other phone's microphone is ready.
+
+```text
+client -> relay: recipient signing key (32 bytes) || revision (8 bytes BE) ||
+                 counter (8 bytes BE) || encrypted audio (641 bytes) || tag (16 bytes)
+relay -> client: sender signing key (32 bytes) || same remaining bytes
+```
+
+Each frame is exactly 705 bytes. The server supplies the sender from the
+authenticated socket and routes only within the current roster. Clients select
+the pairwise receiving key by sender and authenticate the frame with the complete
+roster binding. A third member has no key for either direction of another pair.
+Counter replay, tampering and future epochs fail closed. Old-epoch in-flight
+frames are dropped. On membership change clients replace keys/counters and clear
+all old playback queues. Different revisions and roster bindings prevent nonce
+reuse under the same key. Phones decrypt and mix locally, never at the relay.
+
+No shared group audio secret is sent to new members. A late joiner has no pairwise
+secret for older members' prior conversations. A removed member is excluded from
+new rosters and has no pairwise secret between remaining participants. The public
+roster alone provides no decryption ability. Existing members may of course
+disclose prior audio or their secrets. Every pair's media key changes with each
+roster, but the per-call X25519 private keys are retained for later joins.
+Consequently this is **not** an epoch forward-secure ratchet: compromise of a
+participant's per-call private key exposes that participant's recorded links for
+that call. There is no post-compromise recovery. Fresh per-call X25519 keys provide
+protection against later compromise of long-term signing keys alone, subject to
+memory-erasure limitations.
+
+The caller's announcement remains discoverable while the call runs. Unanswered
+offers expire in two minutes; after first admission the call lifetime is bounded
+by the host's one-hour connection lifetime. Each pending request independently
+expires in two minutes. One socket per phone shares the server's total connection
+budget. Group text frames are capped at 8192 bytes; media at 705. Each sender has
+a 600-frame burst and 300 frames/second refill (up to five 50-fps destinations).
+Control messages retain the 12-message burst / 2-per-second refill. Queues hold
+64 outbound messages; blocked peers are disconnected, not silently dropped within
+an epoch. Sends time out at three seconds. Fifteen-second heartbeats and
+45-second inactivity deadlines remain. These bounds do not prevent DDoS.
+
+Foreground banner/sound notifications are local UI behavior; there is no APNs,
+PushKit, CallKit or background ringing. The relay learns identities, roster
+membership, names, call timing and traffic volume. A malicious relay can deny
+service or suppress updates; authentication does not guarantee delivery, a
+globally consistent view, or instant revocation to disconnected endpoints.
+Use an established, independently reviewed group/media protocol before treating
+this implementation as production-grade secure communications.
+
+## Authenticated Key Exchange (Manual Calls)
 
 All byte concatenations below have fixed-width components except the fixed
 context string. Both endpoints independently generate fresh X25519 private
@@ -317,7 +440,7 @@ constant-rate traffic padding.
 
 ## Resource and Logging Policy
 
-The relay has a connection admission limit, per-socket 60-frame/s replenishing
+The manual relay path has a connection admission limit, per-socket 60-frame/s replenishing
 budget with a 100-frame burst, 1024-byte message limit, bounded WebSocket queues,
 bounded sends, wait/call timeouts, and ping-based liveness. Audio device queues
 hold at most five frames per direction. Full queues discard the oldest

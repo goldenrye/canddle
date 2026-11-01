@@ -1,6 +1,7 @@
 # VPComm
 
-A self-hosted, two-person audio calling prototype. Python desktop and native iPhone clients send
+A self-hosted audio calling prototype: two-person desktop/manual calls and
+up to six-person iPhone group calls. Python desktop and native iPhone clients send
 end-to-end encrypted audio through your own relay on EC2. There is no hosted
 calling API, database, analytics SDK, STUN service, TURN service, or recording
 service.
@@ -10,6 +11,10 @@ not a claim of anonymity, guaranteed protection from interception, or security
 equivalence to any established messenger.
 
 ## Architecture
+
+The following describes compatible manual two-person calls. iPhone group v2 uses
+caller-signed membership and separate end-to-end encrypted links for every pair;
+phones mix audio locally and the caller can accept later joiners.
 
 ```text
 Desktop A -- TLS + encrypted audio --> Caddy / relay on EC2
@@ -183,17 +188,26 @@ it on your iPhone. It supports foreground calls with the desktop client or
 another iPhone, manual invitation sharing, verification codes, mute, hang-up, and
 private-CA certificates.
 
-With the updated relay and app on both phones, **Call Lobby** removes invitation
-copy/paste: both phones go online, the caller announces a new call, a peer requests
-to join, and the caller approves. First-time peers independently compare a
-security code; their device keys are remembered in the Keychain. The invitation
-is encrypted only for the approved peer, then the audio call starts automatically.
-Announcements are visible to all online lobby peers. There is no extra port,
-database, or push service. Desktop clients still use manual invitations.
+With the updated relay and app on all phones, **Relay Group** supports
+**Start call**, foreground banner/sound notifications, **Join call**, and caller
+**Accept / Reject / Ignore** controls. First-time peers independently compare a
+security code; their device keys are remembered in the Keychain. Verified peers
+join with one tap and wait for acceptance. Accepted participants hear and speak
+with everyone, while the caller can accept later joiners up to six participants.
+The caller controls membership and must remain connected.
+
+One relay/token defines the group. Announcements are visible to every connected
+group client, but audio is encrypted separately for each admitted pair. Members
+can leave without ending the call; caller departure ends it for everyone. There
+is no extra port, database, or push service. Locked/backgrounded phones do not
+ring. Desktop clients and old iPhone clients retain manual two-person calling.
+Group raw-PCM bandwidth grows quadratically: about 3.81 GB/hour relay egress at
+six participants, before transport overhead.
 
 See the [iPhone guide](iphone/README.md) for installation, TLS setup, tests, and
-physical-device acceptance checks. The microphone opens only after peer key
-confirmation. Backgrounding or audio interruption ends the call.
+physical-device acceptance checks. Group microphones open after verified,
+caller-approved admission; manual calls require peer key confirmation.
+Backgrounding or audio interruption leaves the call (or ends it if you are caller).
 
 Before wider deployment: independent review of the audio and device-identity
 protocols, Opus compression, desktop echo cancellation, device lifecycle and

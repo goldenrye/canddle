@@ -2,7 +2,7 @@
 
 A fresh native SwiftUI implementation for iOS 16+, using only Apple frameworks.
 Manual calls work with the existing Python desktop client and relay. The
-foreground call lobby requires the updated server and iPhone app on both ends.
+foreground group calls require the updated server and iPhone app on every phone.
 Optional QR pairing requires the updated relay and proxy configuration below.
 The source project is self-contained: no package downloads or project generator
 are needed.
@@ -51,41 +51,53 @@ Pairing replaces the saved relay only after successful Keychain storage.
 This is one-time credential provisioning, not ongoing automatic synchronization.
 If the administrator rotates the shared relay token, pair again.
 
-### Call Without Copying Invitations
+### Group Calls Without Copying Invitations
 
 1. Upgrade the relay (`docker compose up -d --build`) and install the updated app
-   on both phones. Keep using the same WSS address and saved access token.
-2. Under **Call Lobby**, choose a recognizable device name and tap **Go online**
-   on both phones. For private certificates, import and verify the CA first.
-3. The caller taps **New call**. Every connected lobby client sees an incoming
-   call announcement. The invitation secret stays on the caller's phone.
-4. The other phone taps **Request to join**. Both phones display the same
-   six-group security code.
-5. For an **unverified** device, compare the entire code in person or over an
-   independent trusted channel. Do not rely on the displayed name or a message
-   sent through this relay. Keep the app open: use another device for comparison
-   if necessary. A mismatch means cancel, not approve.
-6. The requester taps **Codes match: verify and request approval**. The caller
-   then taps **Codes match: verify and approve**. Each phone remembers the other's
-   device signing key, scoped to this relay, in its device-only Keychain.
-7. The caller encrypts the invitation specifically for that requester. Both
-   phones automatically leave the lobby and start the existing encrypted audio
-   handshake. Microphone permission may be requested. No invitation copy/paste
-   is necessary. Other pending requests are closed.
+   on every phone. Keep the same WSS address and saved access token.
+2. Under **Relay Group**, set a recognizable device name. Receivers tap
+   **Go online** and keep the app open. The caller taps **Start call**, which
+   connects automatically if needed and announces the call.
+3. Other connected clients receive an in-app banner and a system alert sound
+   (subject to device sound settings). A phone connecting later also sees the
+   ongoing call. Tap **Join call** to request admission.
+4. For a previously verified caller, Join call is the only requester action.
+   The caller chooses **Accept**, **Reject**, or **Ignore** for each request.
+   Ignore hides the request locally; it expires without granting access.
+5. On a first call with an **unverified** device, compare the entire displayed
+   security code in person or over an independent trusted channel. The requester
+   confirms the match once and the caller chooses **Codes match: verify and
+   accept**. Each phone remembers the other's device key in its Keychain.
+   A name alone is not identity. A changed key requires verification again.
+6. Once accepted, the microphone starts and everyone listed under
+   **Participants** can hear and talk. Grant microphone access if prompted.
+   The announcement stays open and the caller can accept later joiners while
+   talking. Up to **six participants**, including the caller, are supported.
+7. Participants can **Leave call**; the caller can **Remove participant** or
+   **End call for everyone**. The caller must remain connected. If the caller
+   disconnects, backgrounds, or locks the phone, the whole call ends. Another
+   participant leaving does not end the remaining participants' call.
 
-On subsequent calls with the same verified keys, the requester taps **Confirm
-and request approval** and the caller taps **Approve and start call**. Manual
-approval remains required every time. A new/replaced key is unverified even
-when its display name matches a previous peer. Verified labels use the original
-saved name and show any current name separately.
+The group is the set of people provisioned with this relay's access token,
+not a separate contacts database or named-group feature. Use separate relay
+instances for independently managed groups. Every online group client can see
+announcements, but only accepted participants receive authenticated media links.
+Participants trust the verified caller to authorize the roster; they do not
+individually verify every other member. Always check the participant list.
 
-Announcements expire after two minutes. Callers can reject individual requests;
-either side can cancel or go offline. A disconnect, backgrounding, screen lock,
-or app exit cancels pending work and removes the announcement/request. There is
-no automatic reconnect: tap **Go online** again after returning or ending a call.
-Lobby sessions also end after one hour. All notifications are in-app updates,
-not push notifications or background ringing. The current desktop client keeps
-the manual-invitation workflow and does not participate in the lobby.
+Unanswered announcements and individual join requests expire after two minutes.
+The first acceptance keeps the announcement open for the call. Connections
+have a one-hour maximum lifetime from going online, so a caller already online
+for a long time has less call time remaining. There is no automatic reconnect
+or host migration. Hang up/go offline then go online to receive future calls.
+Notifications are foreground-only: this does not ring a locked/backgrounded
+iPhone and does not implement APNs, PushKit, or CallKit.
+
+Group v2 uses a persistent socket and caller-signed membership epochs with
+separate encryption keys between each pair of phones. Phones mix audio locally;
+the relay cannot decrypt or mix it. No shared audio invitation needs copying.
+Old two-person lobby clients and desktop clients do not appear in group v2;
+desktop/manual-invitation calling remains compatible on the same server.
 
 Go offline before editing relay/TLS settings or using manual invitations.
 **Forget verified peers** removes all saved peer trust (up to 100 keys across
@@ -193,10 +205,18 @@ queues discard old unsent audio; full playback queues discard incoming audio.
 Muting clears queued microphone frames and sends encrypted silence. Previously
 sent frames cannot be recalled.
 
+Group playback mixes one frame per speaker every 20 ms with saturation to PCM16.
+Each speaker has a five-frame queue; missing frames contribute silence.
+Membership changes discard queued old-epoch audio and create fresh media keys
+and counters. A brief gap during a join/leave is possible.
+
 This is not an adaptive real-time transport: WebSocket/TCP packet loss can
-cause delay. Five seconds without microphone frames, ten seconds without
-received frames, or a blocked send ends the call. Raw PCM uses approximately
-240 MB/hour of relay egress per two-person call before transport overhead.
+cause delay. Five seconds without microphone frames or a blocked send ends the
+local call. Manual calls also end after ten seconds without received audio.
+Group signaling has a 45-second receive timeout, kept alive by 15-second heartbeats.
+Group media uses 705-byte frames for each directed pair, about 127 MB/hour of
+relay egress per directed link before transport overhead: approximately 3.81 GB/hour
+for six participants (30 directed links), and about 1.41 Mbit/s upload per phone.
 Opus compression and a reviewed real-time media transport remain future work.
 
 ## Tests
@@ -225,6 +245,12 @@ xcrun swiftc -parse-as-library iphone/Core/*.swift iphone/App/LobbyStore.swift \
   iphone/Tests/LobbyStoreChecks.swift -o /tmp/vpcomm-lobby-state
 VPCOMM_LOBBY_STORE_PROBE=/tmp/vpcomm-lobby-state \
   python -m pytest iphone/Tests/test_lobby_state.py -q
+
+# Group lifecycle and encrypted all-to-all synthetic audio, 2-6 native clients
+xcrun swiftc -parse-as-library iphone/Core/*.swift iphone/App/LobbyStore.swift \
+  iphone/App/GroupStore.swift iphone/Tests/GroupChecks.swift -o /tmp/vpcomm-group-checks
+VPCOMM_GROUP_PROBE=/tmp/vpcomm-group-checks \
+  python -m pytest tests/test_group_server.py iphone/Tests/test_group.py -q
 ```
 
 Install the root project's `test` dependencies in your Python environment first.
@@ -249,6 +275,9 @@ encrypted invitation transfer over TLS, matching verification codes, authorizati
 single-winner approval, expiry, replayed registration, cancellation, trust reload,
 and fail-closed behavior when trust storage fails. Injected-storage tests do not
 verify actual device Keychain permissions or persistence.
+Group tests cover pairwise encryption, epoch binding, tampering/replay, local
+mixing, late joins, removal/rejoin, caller departure, capacity, ignore/reject,
+membership-update races, and live all-to-all traffic over TLS.
 
 ## Physical-Device Acceptance
 
@@ -266,8 +295,11 @@ relying on this client, run iPhone-to-desktop and iPhone-to-iPhone calls and che
   untrusted/wrong-host certificates. Never accept a TLS-bypass workaround.
 - Two iPhones: first-time code comparison, requester confirmation, caller
   approval, and automatic bidirectional audio; repeat with remembered peer keys.
-- Multiple requesters: only the approved peer joins; verify reject, cancel,
-  expiry, backgrounding, and network loss before/during approval.
+- Three to six iPhones: verify everyone hears everyone else, including later
+  joiners. Check foreground alert banners/sounds, mute, participant lists,
+  reject/ignore/expiry, removal and one-tap verified rejoin.
+- Keep a call running while participants join and leave; caller departure must
+  end it for everyone. Test network loss during admission and audio streaming.
 - Relaunch and confirm verified keys persist; a different device with the same
   name must still show as unverified. Test **Forget verified peers**.
 

@@ -220,10 +220,11 @@ final class Relay {
         return reply.token
     }
 
-    func openLobby(identity: Curve25519.Signing.PrivateKey, name: String) async throws {
+    func openLobby(identity: Curve25519.Signing.PrivateKey, name: String, group: Bool = false) async throws {
         guard LobbyProtocol.nameValid(name), !ended else { throw VoiceError.packet }
+        if group { socket.maximumMessageSize = 8192 }
         socket.resume()
-        try await send(.string("{\"v\":1,\"lobby\":true}"), seconds: 10)
+        try await send(.string(group ? "{\"v\":2,\"group\":true}" : "{\"v\":1,\"lobby\":true}"), seconds: 10)
         let challenge = try await lobbyReceive(seconds: 10)
         guard challenge["type"] == "challenge", let nonce = challenge["challenge"] else {
             throw VoiceError.packet
@@ -251,6 +252,21 @@ final class Relay {
         guard case .string(let text) = try await receive(seconds: seconds),
               text.utf8.count <= 1024 else { throw VoiceError.packet }
         return try JSONDecoder().decode([String: String].self, from: Data(text.utf8))
+    }
+
+    func groupSend(_ message: [String: String]) async throws {
+        let data = try JSONEncoder().encode(message)
+        guard data.count <= 8192 else { throw VoiceError.packet }
+        try await send(.string(String(decoding: data, as: UTF8.self)))
+    }
+
+    func groupMedia(_ data: Data) async throws {
+        guard data.count == 705 else { throw VoiceError.packet }
+        try await send(.data(data))
+    }
+
+    func groupReceive() async throws -> URLSessionWebSocketTask.Message {
+        try await receive(seconds: 45)
     }
 
     func connect(_ invitation: CallInvitation, waiting: () -> Void) async throws -> String {

@@ -56,6 +56,9 @@ class Peer:
     request: tuple[str, str] | None = None
     allowance: float = 12
     last: float = field(default_factory=time.monotonic)
+    joined: str | None = None
+    media_allowance: float = 600
+    media_last: float = field(default_factory=time.monotonic)
 
     def emit(self, message):
         try:
@@ -68,7 +71,11 @@ class Peer:
         while True:
             message = await self.queue.get()
             async with asyncio.timeout(3):
-                await self.socket.send(json.dumps(message, separators=(",", ":")))
+                await self.socket.send(
+                    message
+                    if isinstance(message, bytes)
+                    else json.dumps(message, separators=(",", ":"))
+                )
 
 
 @dataclass
@@ -144,7 +151,11 @@ class Lobby:
             async with asyncio.timeout(self.session_lifetime):
                 while True:
                     async with asyncio.timeout(45):
-                        message = self.parse(await socket.recv())
+                        raw = await socket.recv()
+                    if isinstance(raw, bytes):
+                        self.media(peer, raw)
+                        continue
+                    message = self.parse(raw)
                     now = time.monotonic()
                     peer.allowance = min(12, peer.allowance + (now - peer.last) * 2)
                     peer.last = now
@@ -158,6 +169,7 @@ class Lobby:
             pass
         finally:
             if peer:
+                self.depart(peer)
                 self.peers.pop(peer.identity, None)
                 if peer.offer:
                     self.close_offer(peer.offer)
@@ -170,6 +182,12 @@ class Lobby:
                 writer.cancel()
                 with contextlib.suppress(asyncio.CancelledError, ConnectionClosed, TimeoutError):
                     await writer
+
+    def depart(self, peer):
+        pass
+
+    def media(self, peer, raw):
+        raise ValueError("Binary lobby message")
 
     @staticmethod
     def parse(raw):
