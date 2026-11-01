@@ -32,6 +32,12 @@ struct CallView: View {
                     Text("Your relay. End-to-end encrypted audio.").foregroundStyle(.secondary)
                 }
                 Section {
+                    Button {
+                        editing = false
+                        call.scanningPairing = true
+                    } label: {
+                        Label("Pair with QR", systemImage: "qrcode.viewfinder")
+                    }.accessibilityIdentifier("pairQR")
                     TextField("wss://voice.example.com/relay", text: $call.address)
                         .keyboardType(.URL).focused($editing)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -80,7 +86,8 @@ struct CallView: View {
                     }
                     if call.busy {
                         Button(role: .destructive) { call.hangUp() } label: {
-                            Label("Hang up", systemImage: "phone.down.fill")
+                            Label(call.pairing ? "Cancel pairing" : "Hang up",
+                                  systemImage: "phone.down.fill")
                         }.accessibilityIdentifier("hangUp")
                     } else {
                         Button {
@@ -126,6 +133,29 @@ struct CallView: View {
             }
             .fileImporter(isPresented: $call.importCertificate, allowedContentTypes: [.data]) {
                 if case .success(let url) = $0 { call.loadCertificate(url) }
+            }
+            .sheet(isPresented: $call.scanningPairing, onDismiss: call.pairingScannerDismissed) {
+                NavigationStack {
+                    PairingScanner(scanned: call.scannedPairing, failed: call.pairingScanFailed)
+                        .navigationTitle("Scan server QR")
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") { call.scanningPairing = false }
+                            }
+                        }
+                }
+            }
+            .alert("Pair with this server?", isPresented: Binding(
+                get: { call.pairingTicket != nil },
+                set: { if !$0 { call.pairingTicket = nil } }
+            ), presenting: call.pairingTicket) { ticket in
+                Button("Pair and save") { call.redeemPairing(ticket) }
+                Button("Cancel", role: .cancel) { call.pairingTicket = nil }
+            } message: { ticket in
+                Text("\(ticket.relay)\n\nOnly continue for a QR from your trusted server administrator. "
+                     + "This replaces your saved relay. "
+                     + (call.rootFingerprint == nil ? "Using standard iOS TLS trust."
+                        : "Using your imported private CA. Verify its fingerprint first."))
             }
         }
     }

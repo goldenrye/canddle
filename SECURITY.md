@@ -66,6 +66,44 @@ terminal callers must avoid reuse themselves.
 
 ## Transport
 
+### Optional QR Pairing
+
+Pairing provisions relay access, not peer identity or audio keys. Only an
+administrator with access to the relay user's private local Unix socket can
+mint codes. The server must explicitly enable it with a public `wss` relay URL.
+
+The QR is JSON: `{"type":"vpcomm-pair","v":1,"relay":"wss://host/relay","code":"..."}`.
+The code is 32 random bytes encoded as canonical unpadded base64url. Only its
+SHA-256 digest and monotonic two-minute deadline are stored in server memory.
+At most 16 codes exist; restart and admin revocation invalidate outstanding codes.
+The trusted SSH terminal/screen is the bootstrap authentication channel.
+Anyone obtaining the QR before use can race the intended user and gain access.
+
+The iPhone validates the payload, requires user confirmation of the destination,
+and issues `GET https://host/pair` with `Authorization: Pair <code>`. This is a
+native capability exchange over TLS, not a public token-discovery endpoint.
+GET is used because the relay's HTTP handshake hook only accepts GET; possession
+of the explicit authorization header is required and redemption is intentionally
+non-idempotent. No code goes in the URL. Browser origins and WebSocket upgrades
+are rejected, and there is no CORS allowance. Consumption is atomic before the
+response: `{"v":1,"relay":"wss://host/relay","token":"..."}`.
+
+TLS validates hostname/chain/expiry; redirects are rejected. Custom CA trust must
+be established independently before pairing, never from the QR. Responses are
+marked `no-store` and the client uses an ephemeral session, a ten-second deadline,
+and an 8 KiB response limit. Request headers and response bodies must not be
+logged. The proxy and server necessarily see the capability and token.
+Cancellation or a lost response may burn a code; issue a fresh one.
+
+The iPhone atomically saves the returned pair in its device-only Keychain only
+after success. This remains a shared bearer token: an authorized phone can
+disclose it, there is no per-device revocation or automatic rotation, and
+revoking unused codes does not revoke tokens already obtained. Rotate the
+server token and re-pair trusted clients if access is compromised.
+Global pairing rate limiting is not DDoS protection.
+
+### Calling Transport
+
 - Production endpoint: `wss://<host>/relay`.
 - `ws://` is accepted by the client only for the literal hostnames `localhost`,
   `127.0.0.1`, and `::1`, for development. Remote plaintext URLs are rejected.

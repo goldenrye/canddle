@@ -8,7 +8,7 @@
 	# Issue a certificate from Caddy's private CA, including IP-address SANs.
 	tls internal
 	header -Server
-	@relay path /relay /healthz
+        @relay path /relay /healthz /pair
 	handle @relay {
 		reverse_proxy relay:8765 {
 			flush_interval -1

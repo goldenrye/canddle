@@ -4,6 +4,9 @@ services:
     restart: unless-stopped
     environment:
       VPCOMM_ACCESS_TOKEN: ${VPCOMM_ACCESS_TOKEN:?Set VPCOMM_ACCESS_TOKEN in .env}
+      VPCOMM_PUBLIC_RELAY_URL: ${VPCOMM_PUBLIC_RELAY_URL:-}
+    tmpfs:
+      - /run/vpcomm:uid=10001,gid=10001,mode=0700,size=1m
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

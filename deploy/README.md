@@ -137,7 +137,71 @@ Clients connect with `--server wss://voice.example.com:8443/relay` and need no
 deploy hook (`/etc/letsencrypt/renewal-hooks/deploy/`) that runs
 `docker compose restart caddy` from the project directory.
 
-## Operations
+## One-Time iPhone QR Pairing
+
+Pairing is optional and disabled unless `VPCOMM_PUBLIC_RELAY_URL` is set.
+After deploying the updated code, add the exact client-facing address to `.env`:
+
+```dotenv
+VPCOMM_PUBLIC_RELAY_URL=wss://voice.example.com:8443/relay
+```
+
+Use your actual hostname/IP and public port (omit `:8443` if using normal 443).
+The certificate must cover that host. Rebuild and restart the proxy to load
+the new `/pair` route; this interrupts current calls:
+
+```bash
+docker compose up -d --build
+docker compose restart caddy
+```
+
+Over authenticated SSH, run this in the project directory:
+
+```bash
+docker compose exec -T relay vpcomm-pair
+```
+
+Expand the terminal so the whole QR fits without line wrapping. In the updated
+iPhone app, tap **Pair with QR**, allow camera access, scan, verify the displayed
+server, and tap **Pair and save**. Generate a separate QR for each phone.
+For private-CA servers, securely import and verify the public CA in the app
+**before** scanning. The QR does not install a CA or bypass certificate checks.
+
+The QR contains a random 256-bit, single-use capability, not the permanent token.
+It expires two minutes after creation. Treat the screen/QR as sensitive: whoever
+redeems it first gets relay access. Do not put it in tickets, chat archives, or
+recorded terminal sessions. `--json` prints the same sensitive payload for
+local tooling, not for public sharing.
+
+Revoke all unused codes with:
+
+```bash
+docker compose exec -T relay vpcomm-pair --revoke
+```
+
+Restarting the relay also invalidates outstanding codes. Revoking QR codes does
+not revoke tokens already obtained. Rotate `VPCOMM_ACCESS_TOKEN` and pair again
+to remove previously granted access; per-device revocation and automatic
+credential rotation are not implemented.
+
+Pairing uses verified HTTPS on the same host/port, with the code only in an
+Authorization header and responses marked `no-store`. Do not log request
+headers or response bodies at any proxy. The admin command uses a mode-600
+Unix socket in a mode-700, RAM-backed container directory; there is no public
+admin endpoint, extra public port, database, or paid service. The public relay
+port must still remain private behind the TLS proxy.
+
+For non-Docker operation, create a mode-700 directory owned by the relay user,
+set `VPCOMM_PAIRING_SOCKET` to a path inside it for both server and CLI, and set
+`VPCOMM_PUBLIC_RELAY_URL` on the server. Route `/pair` to the relay through your
+TLS proxy. Never expose the raw HTTP relay listener publicly.
+
+There are at most 16 outstanding codes. Pairing requests share a global limit
+of 20 burst / 2 per second; this bounds attempts but cannot prevent denial of
+service. If pairing fails after redemption (lost response, cancellation, or
+Keychain failure), generate a new QR. Codes are deliberately not reusable.
+
+## Routine Operations
 
 - `docker compose logs --tail=50 relay caddy`: inspect operational failures.
   Review before sharing logs; do not add verbose protocol logging.

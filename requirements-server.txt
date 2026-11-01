@@ -3,3 +3,4 @@ cffi==2.1.1
 cryptography==46.0.7
 pycparser==3.12
 websockets==15.0.1
+qrcode==8.2

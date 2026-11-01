@@ -1,7 +1,8 @@
 # iPhone Client
 
 A fresh native SwiftUI implementation for iOS 16+, using only Apple frameworks.
-It works with the existing Python desktop client and relay without server changes.
+Calls work with the existing Python desktop client and relay. Optional QR
+pairing requires the updated relay and proxy configuration described below.
 The source project is self-contained: no package downloads or project generator
 are needed.
 
@@ -25,6 +26,31 @@ review remain release tasks.
 ## Call a Desktop or Another iPhone
 
 Use a relay deployed according to [`../deploy/README.md`](../deploy/README.md).
+
+### Pair Without Typing a Token
+
+1. Ask your server administrator to enable pairing and run
+   `docker compose exec -T relay vpcomm-pair` over authenticated SSH.
+2. For a private-CA server, import its public CA and verify the fingerprint first
+   using the TLS instructions below. Publicly trusted servers need no import.
+3. Tap **Pair with QR** and allow camera access. Scan the terminal's QR within
+   two minutes. Keep the QR private; whoever redeems it first gets relay access.
+4. Confirm the displayed server is yours, then tap **Pair and save**. The app
+   retrieves the token over verified HTTPS and saves the address/token together
+   in the device-only Keychain. No invitation or audio is sent during pairing.
+5. Generate a fresh invitation and start a call as usual.
+
+The QR is single-use, contains no permanent token, and does not change certificate
+trust. The app never follows pairing redirects or opens the QR in a browser.
+Camera frames are used only for local scanning and are not recorded/uploaded.
+Backgrounding cancels pairing. If it fails, previous settings are preserved;
+request a fresh QR because the previous one may already have been consumed.
+Pairing replaces the saved relay only after successful Keychain storage.
+
+This is one-time credential provisioning, not ongoing automatic synchronization.
+If the administrator rotates the shared relay token, pair again.
+
+### Manual Setup and Calling
 
 1. Generate an invitation on one client and share it through an authenticated,
    private channel. Anyone with the invitation secret can impersonate a peer.
@@ -175,5 +201,8 @@ relying on this client, run iPhone-to-desktop and iPhone-to-iPhone calls and che
 - Backgrounding, screen lock, headphone removal, and incoming phone calls.
 - Wi-Fi/cellular interruption, relay restart, and token rotation.
 - Public certificate and private-CA deployments, including a nonstandard port.
+- Scan a real terminal QR, confirm the expected host, relaunch and make a call.
+- Camera denial/cancellation, expired/reused QR rejection, and pairing with
+  untrusted/wrong-host certificates. Never accept a TLS-bypass workaround.
 
 Independent security review remains necessary before high-sensitivity use.

@@ -59,6 +59,9 @@ final class CallStore: ObservableObject {
     @Published private(set) var settingsError: String?
     @Published var invitation = ""
     @Published var importCertificate = false
+    @Published var scanningPairing = false
+    @Published var pairingTicket: PairingTicket?
+    @Published private(set) var pairing = false
     @Published private(set) var status = "Create an invitation or paste one from your partner."
     @Published private(set) var busy = false
     @Published private(set) var connected = false
@@ -73,6 +76,7 @@ final class CallStore: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private var clipboardValue: String?
     private var clearingRelay = false
+    private var scannedQR: String?
 
     init() {
         do {
@@ -107,6 +111,66 @@ final class CallStore: ObservableObject {
             status = "Saved relay forgotten."
         } catch {
             settingsError = "Could not delete the saved relay. Unlock your iPhone and try again."
+        }
+    }
+
+    func scannedPairing(_ text: String) {
+        guard scanningPairing, !busy else { return }
+        scannedQR = text
+        scanningPairing = false
+    }
+
+    func pairingScannerDismissed() {
+        guard let text = scannedQR else { return }
+        scannedQR = nil
+        guard !busy else { return }
+        do {
+            pairingTicket = try PairingTicket.parse(text)
+        } catch {
+            status = "Not a valid VPComm pairing QR. Generate a new code on your server."
+        }
+    }
+
+    func pairingScanFailed(_ message: String) {
+        scannedQR = nil
+        scanningPairing = false
+        status = message
+    }
+
+    func redeemPairing(_ ticket: PairingTicket) {
+        guard !busy else { return }
+        let transport: Relay
+        do {
+            transport = Relay(try RelaySettings(address: ticket.relay, token: ticket.code, root: root))
+        } catch {
+            status = "Invalid pairing server."
+            return
+        }
+        pairingTicket = nil
+        let id = UUID()
+        generation = id
+        relay = transport
+        busy = true
+        pairing = true
+        status = "Pairing securely..."
+        task = Task {
+            do {
+                let received = try await transport.redeem(ticket)
+                try Task.checkCancellation()
+                guard generation == id else { return }
+                // Commit both values before changing the UI. A failed write preserves
+                // the old saved relay and must not claim successful pairing.
+                try SavedRelay(address: ticket.relay, token: received).save()
+                clearingRelay = true
+                address = ticket.relay
+                token = received
+                clearingRelay = false
+                settingsError = nil
+                finish(id, message: "Paired. Relay details saved securely on this iPhone.")
+            } catch {
+                finish(id, message: "Pairing failed. Check TLS trust and request a fresh QR. "
+                       + "Previous saved details were kept.")
+            }
         }
     }
 
@@ -232,6 +296,9 @@ final class CallStore: ObservableObject {
 
     func background() {
         hangUp("Call ended because VPComm left the foreground.")
+        scannedQR = nil
+        scanningPairing = false
+        pairingTicket = nil
         // Unused invitations remain in memory so switching apps to share them works.
     }
 
@@ -247,6 +314,7 @@ final class CallStore: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = false
         task = nil
         busy = false
+        pairing = false
         connected = false
         muted = false
         verification = ""

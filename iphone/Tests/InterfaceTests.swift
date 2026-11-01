@@ -18,6 +18,7 @@ final class InterfaceTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         XCTAssertTrue(app.textFields["address"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["pairQR"].exists)
         app.buttons["forgetRelay"].tap()
         XCTAssertFalse(button(app, "start").isEnabled)
         button(app, "newInvitation").tap()

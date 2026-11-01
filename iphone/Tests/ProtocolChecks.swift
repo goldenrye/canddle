@@ -41,6 +41,17 @@ struct ProtocolChecks {
             try rejects { _ = try RelaySettings(address: url, token: String(repeating: "a", count: 40)) }
         }
         try rejects { _ = try RelaySettings.certificate(Data("invalid".utf8)) }
+        let capability = VoiceProtocol.base64(Data(repeating: 1, count: 32))
+        let qr = "{\"type\":\"vpcomm-pair\",\"v\":1,\"relay\":\"wss://example.com/relay\","
+            + "\"code\":\"\(capability)\"}"
+        let ticket = try PairingTicket.parse(qr)
+        precondition(ticket.code == capability)
+        for bad in ["[]", invite.text, qr.replacingOccurrences(of: "wss:", with: "ws:"),
+                    qr.replacingOccurrences(of: "\"v\":1", with: "\"v\":2"),
+                    qr.replacingOccurrences(of: capability, with: "short"),
+                    String(repeating: "x", count: 1025)] {
+            try rejects { _ = try PairingTicket.parse(bad) }
+        }
         print("PASS: invitation, authentication, tampering, replay, ordering, limits, endpoint policy")
     }
 }

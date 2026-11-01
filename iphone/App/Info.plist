@@ -24,6 +24,8 @@
 	<string>Connect to your self-hosted relay when it is on the local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Use your microphone for encrypted audio calls with your chosen participant.</string>
+        <key>NSCameraUsageDescription</key>
+        <string>Scan a one-time QR code from your server to pair this iPhone securely.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

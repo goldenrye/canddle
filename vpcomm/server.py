@@ -16,6 +16,8 @@ from http import HTTPStatus
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+from .pairing import PairingCodes, admin_socket
+
 LOG = logging.getLogger("vpcomm")
 ROOM_PATTERN = re.compile(r"[A-Za-z0-9_-]{22}")
 
@@ -35,6 +37,7 @@ class Relay:
         max_connections: int = 32,
         wait_timeout: float = 120,
         call_timeout: float = 3600,
+        pairing: PairingCodes | None = None,
     ):
         if len(access_token) < 32 or not access_token.isascii():
             raise ValueError("Access token must be at least 32 ASCII characters")
@@ -46,8 +49,11 @@ class Relay:
         self.call_timeout = call_timeout
         self.rooms: dict[str, Room] = {}
         self.connections = 0
+        self.pairing = pairing
 
     def authorize(self, connection, request):
+        if request.path == "/pair":
+            return self.redeem_pairing(connection, request)
         if request.path == "/healthz":
             return connection.respond(HTTPStatus.OK, "ok\n")
         if request.path != "/relay":
@@ -60,6 +66,31 @@ class Relay:
         if len(values) != 1 or not hmac.compare_digest(values[0].encode("utf-8"), expected):
             return connection.respond(HTTPStatus.UNAUTHORIZED, "unauthorized\n")
         return None
+
+    def redeem_pairing(self, connection, request):
+        status = HTTPStatus.UNAUTHORIZED
+        body = '{"error":"Pairing unavailable, expired, or already used"}\n'
+        values = request.headers.get_all("Authorization")
+        if self.pairing is None:
+            status = HTTPStatus.NOT_FOUND
+        elif not self.pairing.admit():
+            status = HTTPStatus.TOO_MANY_REQUESTS
+        elif (
+            not request.headers.get_all("Origin")
+            and not request.headers.get_all("Upgrade")
+            and len(values) == 1
+            and values[0].startswith("Pair ")
+            and self.pairing.redeem(values[0][5:])
+        ):
+            status = HTTPStatus.OK
+            body = json.dumps({"v": 1, "relay": self.pairing.relay_url, "token": self.access_token})
+        response = connection.respond(status, body)
+        del response.headers["Content-Type"]
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     async def handle(self, socket: ServerConnection):
         if self.connections >= self.max_connections:
@@ -161,18 +192,30 @@ def build_server(relay: Relay, host: str, port: int):
 
 async def run(args):
     token = os.environ.get("VPCOMM_ACCESS_TOKEN", "")
+    public_url = os.environ.get("VPCOMM_PUBLIC_RELAY_URL", "")
+    pairing = PairingCodes(public_url) if public_url else None
+    if pairing and (len(token) > 4096 or any(not 33 <= ord(char) <= 126 for char in token)):
+        raise ValueError("Pairing requires a token of at most 4096 printable ASCII characters")
     relay = Relay(
         token,
         max_connections=args.max_connections,
         wait_timeout=args.wait_timeout,
         call_timeout=args.call_timeout,
+        pairing=pairing,
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
-    async with build_server(relay, args.host, args.port):
+    async with contextlib.AsyncExitStack() as stack:
+        if pairing:
+            await stack.enter_async_context(
+                admin_socket(
+                    pairing, os.environ.get("VPCOMM_PAIRING_SOCKET", "/run/vpcomm/admin.sock")
+                )
+            )
+        await stack.enter_async_context(build_server(relay, args.host, args.port))
         LOG.warning(
             "Relay listening on %s:%s; TLS must terminate at the reverse proxy",
             args.host,

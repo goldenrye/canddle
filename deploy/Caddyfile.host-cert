@@ -10,7 +10,7 @@
 		-Server
 		Strict-Transport-Security "max-age=31536000"
 	}
-	@relay path /relay /healthz
+        @relay path /relay /healthz /pair
 	handle @relay {
 		reverse_proxy relay:8765 {
 			flush_interval -1

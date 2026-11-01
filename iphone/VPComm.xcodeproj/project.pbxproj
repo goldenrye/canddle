@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+                C00000000000000000000001 = {isa = PBXBuildFile; fileRef = C00000000000000000000002; };
 		A00000000000000000000040 /* VPCommApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000030 /* VPCommApp.swift */; };
 		A00000000000000000000041 /* CallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000031 /* CallStore.swift */; };
 		A00000000000000000000042 /* AudioIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000032 /* AudioIO.swift */; };
@@ -26,6 +27,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+                C00000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScanner.swift; sourceTree = "<group>"; };
 		A00000000000000000000006 /* VPComm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = VPComm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000030 /* VPCommApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPCommApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000031 /* CallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallStore.swift; sourceTree = "<group>"; };
@@ -70,6 +72,7 @@
 		A00000000000000000000020 /* App */ = {
 			isa = PBXGroup;
 			children = (
+                                C00000000000000000000002,
 				A00000000000000000000030 /* VPCommApp.swift */,
 				A00000000000000000000031 /* CallStore.swift */,
 				A00000000000000000000032 /* AudioIO.swift */,
@@ -163,6 +166,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                                C00000000000000000000001,
 				A00000000000000000000040 /* VPCommApp.swift in Sources */,
 				A00000000000000000000041 /* CallStore.swift in Sources */,
 				A00000000000000000000042 /* AudioIO.swift in Sources */,

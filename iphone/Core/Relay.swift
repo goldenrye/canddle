@@ -2,6 +2,26 @@ import CryptoKit
 import Foundation
 import Security
 
+struct PairingTicket: Decodable, Identifiable {
+    let type: String
+    let v: Int
+    let relay: String
+    let code: String
+    var id: String { code }
+
+    static func parse(_ text: String) throws -> PairingTicket {
+        guard text.utf8.count <= 1024,
+              let ticket = try? JSONDecoder().decode(Self.self, from: Data(text.utf8)),
+              ticket.type == "vpcomm-pair", ticket.v == 1 else { throw VoiceError.packet }
+        _ = try VoiceProtocol.decode(ticket.code, size: 32)
+        guard ticket.relay.utf8.count <= 256,
+              ticket.relay.utf8.allSatisfy({ (33...126).contains($0) }),
+              !ticket.relay.contains("\\") else { throw VoiceError.endpoint }
+        _ = try RelaySettings(address: ticket.relay, token: ticket.code)
+        return ticket
+    }
+}
+
 struct RelaySettings {
     let url: URL
     let token: String
@@ -51,7 +71,7 @@ struct RelaySettings {
     }
 }
 
-private final class CertificateDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate,
+private class CertificateDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate,
                                          @unchecked Sendable {
     let host: String
     let root: Data?
@@ -97,6 +117,42 @@ private final class CertificateDelegate: NSObject, URLSessionDelegate, URLSessio
     }
 }
 
+private final class PairingResponseDelegate: CertificateDelegate, URLSessionDataDelegate,
+                                             @unchecked Sendable {
+    private var bytes = Data()
+    private var response: URLResponse?
+    private let completion: @Sendable (Result<(Data, URLResponse), Error>) -> Void
+
+    init(_ settings: RelaySettings,
+         completion: @escaping @Sendable (Result<(Data, URLResponse), Error>) -> Void) {
+        self.completion = completion
+        super.init(settings)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              response.expectedContentLength <= 8192 else {
+            completionHandler(.cancel)
+            return
+        }
+        self.response = response
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard bytes.count + data.count <= 8192 else { dataTask.cancel(); return }
+        bytes.append(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error { completion(.failure(error)); return }
+        guard let response else { completion(.failure(VoiceError.packet)); return }
+        completion(.success((bytes, response)))
+    }
+}
+
 @MainActor
 final class Relay {
     private let session: URLSession
@@ -105,8 +161,10 @@ final class Relay {
     private var ready = false
     private var ended = false
     private var pending: [UUID: (Error) -> Void] = [:]
+    private let settings: RelaySettings
 
     init(_ settings: RelaySettings) {
+        self.settings = settings
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
         config.httpCookieStorage = nil
@@ -120,6 +178,46 @@ final class Relay {
         request.setValue("Bearer \(settings.token)", forHTTPHeaderField: "Authorization")
         socket = session.webSocketTask(with: request)
         socket.maximumMessageSize = 1024
+    }
+
+    func redeem(_ ticket: PairingTicket) async throws -> String {
+        guard settings.url.absoluteString == ticket.relay else { throw VoiceError.endpoint }
+        var components = URLComponents(url: settings.url, resolvingAgainstBaseURL: false)!
+        components.scheme = "https"
+        components.path = "/pair"
+        var request = URLRequest(url: components.url!, cachePolicy: .reloadIgnoringLocalCacheData)
+        // The capability goes in a header, never in URLs, browser history, or query logs.
+        request.setValue("Pair \(ticket.code)", forHTTPHeaderField: "Authorization")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        var pairingSession: URLSession?
+        defer { pairingSession?.invalidateAndCancel(); stop() }
+        let (data, response): (Data, URLResponse) = try await bounded(10) { complete in
+            let config = URLSessionConfiguration.ephemeral
+            config.urlCache = nil
+            config.httpCookieStorage = nil
+            config.httpShouldSetCookies = false
+            config.connectionProxyDictionary = [:]
+            pairingSession = URLSession(
+                configuration: config,
+                delegate: PairingResponseDelegate(self.settings, completion: complete),
+                delegateQueue: nil
+            )
+            pairingSession?.dataTask(with: request).resume()
+        }
+        try Task.checkCancellation()
+        guard !ended, let http = response as? HTTPURLResponse, http.statusCode == 200,
+              http.url == request.url else { throw VoiceError.ended }
+        struct Reply: Decodable {
+            let v: Int
+            let relay: String
+            let token: String
+        }
+        let reply = try JSONDecoder().decode(Reply.self, from: data)
+        guard reply.v == 1, reply.relay == ticket.relay, reply.token.utf8.count <= 4096 else {
+            throw VoiceError.packet
+        }
+        _ = try RelaySettings(address: reply.relay, token: reply.token)
+        return reply.token
     }
 
     func connect(_ invitation: CallInvitation, waiting: () -> Void) async throws -> String {

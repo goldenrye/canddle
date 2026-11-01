@@ -9,6 +9,7 @@ struct Probe {
         let invitation: String
         let root: String?
         let cancel: Bool?
+        let pairing: String?
     }
 
     @MainActor static func main() async {
@@ -18,6 +19,21 @@ struct Probe {
             )
             let root = try input.root.map {
                 try RelaySettings.certificate(Data(contentsOf: URL(fileURLWithPath: $0)))
+            }
+            if let raw = input.pairing {
+                let ticket = try PairingTicket.parse(raw)
+                let relay = Relay(try RelaySettings(address: ticket.relay, token: ticket.code, root: root))
+                let cancellation = Task { @MainActor in
+                    if input.cancel == true {
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                        relay.stop()
+                    }
+                }
+                defer { cancellation.cancel(); relay.stop() }
+                let token = try await relay.redeem(ticket)
+                guard token == input.token else { throw VoiceError.token }
+                print("PASS pairing")
+                return
             }
             let relay = Relay(try RelaySettings(
                 address: input.address, token: input.token, root: root, testLoopback: true

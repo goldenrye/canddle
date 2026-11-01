@@ -16,6 +16,7 @@ from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
 from vpcomm.crypto import AUDIO, CONFIRM, Handshake, Invitation
+from vpcomm.pairing import PairingCodes
 from vpcomm.server import Relay
 
 PROBE = os.environ.get("VPCOMM_IPHONE_PROBE")
@@ -80,7 +81,7 @@ def tls_fixture(path, expired=False):
     return context, root
 
 
-async def probe(url, invitation, root=None, token=TOKEN, cancel=False):
+async def probe(url, invitation, root=None, token=TOKEN, cancel=False, pairing=None):
     process = await asyncio.create_subprocess_exec(
         PROBE,
         stdin=asyncio.subprocess.PIPE,
@@ -93,6 +94,7 @@ async def probe(url, invitation, root=None, token=TOKEN, cancel=False):
         invitation=invitation.export(),
         root=str(root) if root else None,
         cancel=cancel,
+        pairing=json.dumps(pairing) if pairing else None,
     )
     try:
         async with asyncio.timeout(15):
@@ -174,3 +176,56 @@ async def test_stalled_connection_deadline_and_hangup(cancel):
         async with asyncio.timeout(14 if not cancel else 3):
             code, output, _ = await probe(url, Invitation.create(), cancel=cancel)
         assert code != 0 and output.startswith("FAIL")
+
+
+@pytest.mark.parametrize("failure", [None, "untrusted", "hostname", "expired", "revoke"])
+async def test_swift_pairing_and_replay(tmp_path, failure):
+    context, root = tls_fixture(tmp_path, expired=failure == "expired")
+    relay = Relay(TOKEN)
+    async with serve(
+        relay.handle, "127.0.0.1", 0, ssl=context, process_request=relay.authorize
+    ) as server:
+        host = "localhost" if failure == "hostname" else "127.0.0.1"
+        url = f"wss://{host}:{server.sockets[0].getsockname()[1]}/relay"
+        relay.pairing = PairingCodes(url)
+        ticket = relay.pairing.create()
+        if failure == "revoke":
+            relay.pairing.codes.clear()
+        code, output, errors = await probe(
+            url, Invitation.create(), None if failure == "untrusted" else root, pairing=ticket
+        )
+        if failure:
+            assert code != 0 and output.startswith("FAIL"), errors
+        else:
+            assert code == 0 and output.strip() == "PASS pairing", errors + output
+            code, output, _ = await probe(url, Invitation.create(), root, pairing=ticket)
+            assert code != 0 and output.startswith("FAIL")
+
+
+@pytest.mark.parametrize("mode", ["redirect", "large", "cancel"])
+async def test_pairing_bad_response_and_cancellation(tmp_path, mode):
+    context, root = tls_fixture(tmp_path)
+    hits = []
+
+    async def respond(connection, request):
+        from http import HTTPStatus
+
+        hits.append(request.path)
+        if mode == "cancel":
+            await asyncio.sleep(1)
+        status = HTTPStatus.FOUND if mode == "redirect" else HTTPStatus.OK
+        response = connection.respond(status, "x" * (9000 if mode == "large" else 1))
+        if mode == "redirect":
+            response.headers["Location"] = "/stolen"
+        return response
+
+    async with serve(
+        lambda _: None, "127.0.0.1", 0, ssl=context, process_request=respond
+    ) as server:
+        url = f"wss://127.0.0.1:{server.sockets[0].getsockname()[1]}/relay"
+        ticket = PairingCodes(url).create()
+        code, output, _ = await probe(
+            url, Invitation.create(), root, pairing=ticket, cancel=mode == "cancel"
+        )
+        assert code != 0 and output.startswith("FAIL")
+        assert "/stolen" not in hits
