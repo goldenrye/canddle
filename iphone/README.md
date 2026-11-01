@@ -1,5 +1,10 @@
 # iPhone Client
 
+The installed app is named **canddle** and uses the supplied six-can-and-flame
+artwork for its icon and in-app branding. The Xcode project/target remains
+`VPComm` and the bundle identifier is unchanged, preserving existing Keychain
+settings when updating with the same signing identity.
+
 A fresh native SwiftUI implementation for iOS 16+, using only Apple frameworks.
 Manual calls work with the existing Python desktop client and relay. The
 foreground group calls require the updated server and iPhone app on every phone.

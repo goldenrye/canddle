@@ -138,7 +138,7 @@ final class CallStore: ObservableObject {
         do {
             pairingTicket = try PairingTicket.parse(text)
         } catch {
-            status = "Not a valid VPComm pairing QR. Generate a new code on your server."
+            status = "Not a valid canddle pairing QR. Generate a new code on your server."
         }
     }
 
@@ -407,8 +407,8 @@ final class CallStore: ObservableObject {
     }
 
     func background() {
-        lobby.disconnect("Offline because VPComm left the foreground. Go online again to receive calls.")
-        hangUp("Call ended because VPComm left the foreground.")
+        lobby.disconnect("Offline because canddle left the foreground. Go online again to receive calls.")
+        hangUp("Call ended because canddle left the foreground.")
         scannedQR = nil
         scanningPairing = false
         pairingTicket = nil

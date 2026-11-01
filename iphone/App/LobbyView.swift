@@ -21,7 +21,7 @@ struct LobbyView: View {
                         .accessibilityIdentifier("lobbyConnect")
                 }
             } footer: {
-                Text("Keep VPComm open to receive and join calls.")
+                Text("Keep canddle open to receive and join calls.")
             }
             if lobby.online {
                 Section("Available calls") {

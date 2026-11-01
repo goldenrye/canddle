@@ -13,7 +13,15 @@ struct VPCommApp: App {
                 .overlay {
                     if phase != .active {
                         Color(.systemBackground).ignoresSafeArea()
-                            .overlay(Label("VPComm", systemImage: "lock.shield").font(.title))
+                            .overlay {
+                                VStack(spacing: 12) {
+                                    Image("BrandLogo").resizable().scaledToFit()
+                                        .frame(width: 96, height: 96)
+                                        .clipShape(RoundedRectangle(cornerRadius: 22))
+                                        .accessibilityHidden(true)
+                                    Text("canddle").font(.title)
+                                }
+                            }
                     }
                 }
                 .onChange(of: phase) { if $0 == .background { call.background() } }
@@ -32,8 +40,14 @@ struct CallView: View {
             List {
                 Section {
                     HStack(spacing: 12) {
-                        Image(systemName: call.connected ? "waveform" : "lock.shield.fill")
-                            .font(.title2).foregroundStyle(.teal)
+                        if call.connected {
+                            Image(systemName: "waveform").font(.title2).foregroundStyle(.teal)
+                        } else {
+                            Image("BrandLogo").resizable().scaledToFit()
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .accessibilityHidden(true)
+                        }
                         VStack(alignment: .leading, spacing: 4) {
                             Text(call.connected ? "Encrypted call" : (lobby.online ? "You're online" : "Private group calls"))
                                 .font(.headline)
