@@ -25,6 +25,16 @@ struct VPCommApp: App {
                     }
                 }
                 .onChange(of: phase) { if $0 == .background { call.background() } }
+                .task(id: phase) {
+                    guard phase == .active else { return }
+                    // Retry only the listening connection, never a call or admission.
+                    while !Task.isCancelled {
+                        call.connectAutomatically()
+                        do {
+                            try await Task.sleep(nanoseconds: 5_000_000_000)
+                        } catch { return }
+                    }
+                }
         }
     }
 }
@@ -72,7 +82,6 @@ struct CallView: View {
                     }
                 } else if !call.busy || call.groupAudio {
                     LobbyView(lobby: lobby, callBusy: call.busy,
-                              connect: { call.openLobby() },
                               startCall: { call.openLobby(startCall: true) })
                 }
             }
@@ -175,7 +184,7 @@ struct RelaySettingsView: View {
                             .focused($editing)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                             .accessibilityIdentifier("token")
-                    }.accessibilityIdentifier("manualConnection")
+                    }
                     if let error = call.settingsError {
                         Text(error).foregroundStyle(.red)
                     }
@@ -260,6 +269,11 @@ struct RelaySettingsView: View {
                      + (call.rootFingerprint == nil ? "Using standard iOS TLS trust."
                         : "Using your imported private CA. Verify its fingerprint first."))
             }
+        }
+        .onAppear { call.settingsVisible = true }
+        .onDisappear {
+            call.settingsVisible = false
+            call.connectAutomatically()
         }
     }
 

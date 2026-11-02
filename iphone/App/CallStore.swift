@@ -80,6 +80,7 @@ final class CallStore: ObservableObject {
     private var clipboardValue: String?
     private var clearingRelay = false
     private var scannedQR: String?
+    var settingsVisible = false
 
     init() {
         lobby.onAudioReady = { [weak self] in self?.startGroupAudio() }
@@ -100,7 +101,7 @@ final class CallStore: ObservableObject {
 
     private func saveRelay() {
         guard !clearingRelay else { return }
-        if lobby.active { lobby.disconnect("Relay settings changed. Go online again.") }
+        if lobby.active { lobby.disconnect("Relay settings changed. Return to Calls to reconnect.") }
         do {
             try SavedRelay(address: address, token: token).save()
             settingsError = nil
@@ -227,14 +228,25 @@ final class CallStore: ObservableObject {
         status = "Using standard iOS certificate trust."
     }
 
-    func openLobby(startCall: Bool = false) {
+    func connectAutomatically() {
+        guard UIApplication.shared.applicationState == .active,
+              !settingsVisible, !busy, !lobby.active,
+              !address.isEmpty, !token.isEmpty else { return }
+        openLobby(automatic: true)
+    }
+
+    func openLobby(startCall: Bool = false, automatic: Bool = false) {
         guard !busy else { return }
         do {
             let settings = try RelaySettings(address: address, token: token, root: root)
             lobby.connect(settings, startCall: startCall)
         } catch {
             status = (error as? VoiceError)?.errorDescription ?? "Check relay settings."
-            callFailure = status
+            if automatic {
+                lobby.disconnect(status)
+            } else {
+                callFailure = status
+            }
         }
     }
 
@@ -399,7 +411,7 @@ final class CallStore: ObservableObject {
         if groupAudio {
             let reason = message == "Call ended. Use a new invitation."
                 ? "You left the group call." : message
-            lobby.disconnect("\(reason) Go online to receive calls again.")
+            lobby.disconnect("\(reason) Reconnecting to receive calls.")
             return
         }
         task?.cancel()
@@ -407,7 +419,7 @@ final class CallStore: ObservableObject {
     }
 
     func background() {
-        lobby.disconnect("Offline because canddle left the foreground. Go online again to receive calls.")
+        lobby.disconnect("Offline while canddle is in the background. Reconnects when you return.")
         hangUp("Call ended because canddle left the foreground.")
         scannedQR = nil
         scanningPairing = false

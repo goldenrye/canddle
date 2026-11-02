@@ -3,7 +3,6 @@ import SwiftUI
 struct LobbyView: View {
     @ObservedObject var lobby: GroupStore
     let callBusy: Bool
-    let connect: () -> Void
     let startCall: () -> Void
 
     var body: some View {
@@ -16,12 +15,8 @@ struct LobbyView: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("lobbyAnnounce")
                 .disabled(lobby.sending || (lobby.active && !lobby.online))
-                if !lobby.active {
-                    Button("Go online to receive calls", action: connect)
-                        .accessibilityIdentifier("lobbyConnect")
-                }
             } footer: {
-                Text("Keep canddle open to receive and join calls.")
+                Text("Connects automatically. Keep canddle open to receive and join calls.")
             }
             if lobby.online {
                 Section("Available calls") {

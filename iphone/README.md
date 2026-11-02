@@ -44,7 +44,7 @@ Use a relay deployed according to [`../deploy/README.md`](../deploy/README.md).
 4. Confirm the displayed server is yours, then tap **Pair and save**. The app
    retrieves the token over verified HTTPS and saves the address/token together
    in the device-only Keychain. No invitation or audio is sent during pairing.
-5. Return to **Calls** to start a group call or go online to receive calls.
+5. Return to **Calls**. The app connects automatically to receive calls.
 
 The QR is single-use, contains no permanent token, and does not change certificate
 trust. The app never follows pairing redirects or opens the QR in a browser.
@@ -60,8 +60,8 @@ If the administrator rotates the shared relay token, pair again.
 
 1. Upgrade the relay (`docker compose up -d --build`) and install the updated app
    on every phone. Keep the same WSS address and saved access token.
-2. Set a recognizable device name in **Settings**. On **Calls**, receivers tap
-   **Go online to receive calls** and keep the app open. The caller taps **Start call**, which
+2. Set a recognizable device name in **Settings**. On **Calls**, receivers
+   connect automatically and keep the app open. The caller taps **Start call**, which
    connects automatically if needed and announces the call.
 3. Other connected clients receive an in-app banner and a system alert sound
    (subject to device sound settings). A phone connecting later also sees the
@@ -93,8 +93,10 @@ individually verify every other member. Always check the participant list.
 Unanswered announcements and individual join requests expire after two minutes.
 The first acceptance keeps the announcement open for the call. Connections
 have a one-hour maximum lifetime from going online, so a caller already online
-for a long time has less call time remaining. There is no automatic reconnect
-or host migration. Hang up/go offline then go online to receive future calls.
+for a long time has less call time remaining. The app automatically reconnects
+to receive future calls on launch, foreground return, and return from Settings.
+While active, it checks every five seconds and retries disconnected listening
+connections. It never automatically restarts or rejoins a call; there is no host migration.
 Notifications are foreground-only: this does not ring a locked/backgrounded
 iPhone and does not implement APNs, PushKit, or CallKit.
 
@@ -112,6 +114,7 @@ code** to help the caller complete their comparison.
 
 Use **Settings > Go offline** before editing connection settings. Settings are
 unavailable while a call or join request is active; finish or cancel it first.
+Automatic connection attempts pause in Settings and resume when you return to Calls.
 **Advanced > Reset saved settings >**
 **Forget verified peers** removes all saved peer trust (up to 100 keys across
 relays) while retaining your own device identity. In the same section, **Forget saved relay** deletes
@@ -187,7 +190,7 @@ No relay address, access token, invitation, or CA private key is bundled.
   Connect your preferred headphones before starting.
 - A brief inactive state obscures the interface but does not alone hang up.
   Transitioning to the background does.
-- No CallKit, APNs, background ringing, system contacts, automatic reconnect, or accounts.
+- No CallKit, APNs, background ringing, system contacts, automatic call rejoining, or accounts.
 - The lobby exposes call availability, public device keys, names, and request/
   approval timing to the relay. All online lobby peers see announcements.
 - No app-managed recording, analytics, or cloud storage. Relay details persist
@@ -289,8 +292,9 @@ Interop tests are skipped unless `VPCOMM_IPHONE_PROBE` is set. The probe reads
 test credentials from stdin rather than command-line arguments.
 
 Run the UI test with Command-U in Xcode using an installed iPhone simulator.
-It checks invitation creation, insecure-address rejection, saved relay restoration
-after relaunch/backgrounding, and deletion. Test outputs and
+It checks the compact interface, insecure-address rejection, automatic connection
+attempts after setup/relaunch/backgrounding, pausing retries in Settings, saved
+relay restoration, and deletion. Test outputs and
 builds should live outside the repository, using `-derivedDataPath /tmp/...`.
 UI tests require signing for Keychain access. For command-line simulator tests,
 use `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` (local ad-hoc signing), not

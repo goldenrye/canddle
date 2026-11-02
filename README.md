@@ -195,6 +195,9 @@ security code; their device keys are remembered in the Keychain. Verified peers
 join with one tap and wait for acceptance. Accepted participants hear and speak
 with everyone, while the caller can accept later joiners up to six participants.
 The caller controls membership and must remain connected.
+Configured phones automatically connect on the foreground Calls screen and
+retry disconnected listening connections. Settings pauses automatic attempts;
+returning to Calls resumes them. Calls are never automatically started or rejoined.
 
 One relay/token defines the group. Announcements are visible to every connected
 group client, but audio is encrypted separately for each admitted pair. Members

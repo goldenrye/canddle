@@ -64,8 +64,10 @@ struct GroupChecks {
                 await Task.yield()
                 precondition(!host.active && !host.online && !host.inCall)
             }
-            host.connect(settings, startCall: true)
             clients[1].connect(settings)
+            try await wait { clients[1].online }
+            precondition(!clients[1].inCall && clients[1].offers.isEmpty)
+            host.connect(settings, startCall: true)
             try await wait { host.ownOffer != nil && clients[1].offers.count == 1 && !host.sending }
             precondition(clients[1].notification != nil)
             let offer = clients[1].offers[0]

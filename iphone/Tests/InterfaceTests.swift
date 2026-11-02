@@ -18,6 +18,19 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(app.buttons["settings"].waitForExistence(timeout: 10))
         app.buttons["settings"].tap()
         XCTAssertTrue(app.buttons["pairQR"].waitForExistence(timeout: 5))
+        if app.buttons["Go offline"].exists { app.buttons["Go offline"].tap() }
+    }
+
+    @MainActor private func automaticConnection(_ app: XCUIApplication) {
+        let attempted = NSPredicate(format:
+            "label CONTAINS %@ OR label CONTAINS %@", "Connecting to relay group",
+            "Group connection or authentication failed")
+        let expectation = XCTNSPredicateExpectation(predicate: attempted,
+                                                     object: app.staticTexts["lobbyStatus"])
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 10), .completed)
+        XCTAssertFalse(app.buttons["lobbyConnect"].exists)
+        XCTAssertFalse(app.buttons["hangUp"].exists)
+        XCTAssertFalse(app.alerts["Call could not continue"].exists)
     }
 
     @MainActor private func forget(_ app: XCUIApplication) {
@@ -43,7 +56,7 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(button(app, "importCA").exists)
     }
 
-    @MainActor func testInsecureAddressShowsActionableAlert() {
+    @MainActor func testAutomaticConnectionRejectsInsecureAddressWithoutAlert() {
         let app = XCUIApplication()
         app.launch()
         settings(app)
@@ -55,11 +68,13 @@ final class InterfaceTests: XCTestCase {
         app.secureTextFields["token"].typeText(String(repeating: "a", count: 40))
         app.buttons["Done"].tap()
         app.navigationBars["Settings"].buttons["Calls"].tap()
-        button(app, "lobbyAnnounce").tap()
-        XCTAssertTrue(app.alerts["Call could not continue"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Use wss://")).firstMatch.exists)
+        let validation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Use wss://"),
+            object: app.staticTexts["lobbyStatus"])
+        XCTAssertEqual(XCTWaiter.wait(for: [validation], timeout: 10), .completed)
+        XCTAssertFalse(app.alerts["Call could not continue"].exists)
+        XCTAssertFalse(app.buttons["lobbyConnect"].exists)
         XCTAssertFalse(app.buttons["hangUp"].exists)
-        app.alerts.buttons["OK"].tap()
         settings(app)
         forget(app)
     }
@@ -71,25 +86,31 @@ final class InterfaceTests: XCTestCase {
         forget(app)
         button(app, "Enter connection manually").tap()
         app.textFields["address"].tap()
-        app.textFields["address"].typeText("wss://example.com:8443/relay")
+        app.textFields["address"].typeText("wss://127.0.0.1:1/relay")
         app.secureTextFields["token"].tap()
         app.secureTextFields["token"].typeText(String(repeating: "b", count: 40))
         app.buttons["Done"].tap()
+        // Editing stays offline even after an automatic retry interval.
+        let unexpectedConnection = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true"), object: app.buttons["Go offline"])
+        unexpectedConnection.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [unexpectedConnection], timeout: 6), .completed)
         app.navigationBars["Settings"].buttons["Calls"].tap()
+        automaticConnection(app)
         XCUIDevice.shared.press(.home)
         app.activate()
-        XCTAssertTrue(button(app, "lobbyAnnounce").isEnabled)
+        automaticConnection(app)
         app.terminate()
         app.launch()
         XCTAssertTrue(app.buttons["lobbyAnnounce"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["lobbyAnnounce"].isHittable)
-        XCTAssertTrue(app.buttons["lobbyConnect"].isHittable)
+        automaticConnection(app)
         XCTAssertFalse(app.textFields["address"].exists)
         settings(app)
         button(app, "Enter connection manually").tap()
-        XCTAssertEqual(app.textFields["address"].value as? String, "wss://example.com:8443/relay")
-        // Restored address and token expose group actions without invitations.
-        // This test never connects to a server or opens the microphone.
+        XCTAssertEqual(app.textFields["address"].value as? String, "wss://127.0.0.1:1/relay")
+        // The closed loopback port exercises automatic attempts without a real
+        // server, external credential transmission, or microphone access.
         forget(app)
         app.terminate()
         app.launch()

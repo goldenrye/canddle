@@ -8,7 +8,7 @@ final class GroupStore: ObservableObject {
     @Published private(set) var active = false
     @Published private(set) var online = false
     @Published private(set) var sending = false
-    @Published private(set) var status = "Go online to receive calls from this relay group."
+    @Published private(set) var status = "Connects automatically once your relay is configured."
     @Published private(set) var offers: [LobbyOffer] = []
     @Published private(set) var ownOffer: LobbyOffer?
     @Published private(set) var candidates: [LobbyCandidate] = []
@@ -88,7 +88,7 @@ final class GroupStore: ObservableObject {
                                 try await relay.groupSend(["type": "ping"])
                             }
                         } catch {
-                            if generation == id { disconnect("Group connection lost. Go online again.") }
+                            if generation == id { disconnect("Group connection lost. Reconnecting on Calls.") }
                         }
                     }
                     if autoStart { autoStart = false; announce() }
@@ -116,7 +116,7 @@ final class GroupStore: ObservableObject {
         } catch { status = "Could not load the device identity. Unlock the phone and retry." }
     }
 
-    func disconnect(_ message: String = "Offline. Go online to receive group calls.") {
+    func disconnect(_ message: String = "Offline. Reconnects automatically on Calls.") {
         generation = UUID()
         transport?.stop(); transport = nil
         task?.cancel(); task = nil
@@ -160,7 +160,7 @@ final class GroupStore: ObservableObject {
                 sending = false; action = nil
                 processDepartures()
             } catch {
-                if generation == id { disconnect("Could not send group action. Go online again.") }
+                if generation == id { disconnect("Could not send group action. Reconnecting on Calls.") }
             }
         }
     }
@@ -171,7 +171,7 @@ final class GroupStore: ObservableObject {
         deadline = Task {
             do {
                 try await Task.sleep(nanoseconds: 120_000_000_000)
-                if generation == id && !inCall { disconnect("Call request expired. Go online again.") }
+                if generation == id && !inCall { disconnect("Call request expired. Reconnecting on Calls.") }
             } catch {}
         }
     }

@@ -338,7 +338,11 @@ an epoch. Sends time out at three seconds. Fifteen-second heartbeats and
 45-second inactivity deadlines remain. These bounds do not prevent DDoS.
 
 Foreground banner/sound notifications are local UI behavior; there is no APNs,
-PushKit, CallKit or background ringing. The relay learns identities, roster
+PushKit, CallKit or background ringing. Configured iPhones automatically open
+the authenticated group connection while active on Calls, retrying disconnected
+listeners every five seconds. Settings pauses automatic attempts; backgrounding
+disconnects. Reconnection never restores call membership or starts the microphone.
+The relay learns identities, roster
 membership, names, call timing and traffic volume. A malicious relay can deny
 service or suppress updates; authentication does not guarantee delivery, a
 globally consistent view, or instant revocation to disconnected endpoints.
