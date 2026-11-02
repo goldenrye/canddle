@@ -56,6 +56,34 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(button(app, "importCA").exists)
     }
 
+    @MainActor func testDeviceNameCanBeChangedAndSurvivesRelaunch() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["settings"].waitForExistence(timeout: 10))
+        app.buttons["settings"].tap()
+        let field = app.textFields["lobbyName"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(field.isEnabled)
+        let previous = field.value as? String ?? "My iPhone"
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count))
+        field.typeText("Office iPhone")
+        app.buttons["Done"].tap()
+        button(app, "saveDeviceName").tap()
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["settings"].waitForExistence(timeout: 10))
+        app.buttons["settings"].tap()
+        XCTAssertTrue(app.textFields["lobbyName"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["lobbyName"].value as? String, "Office iPhone")
+        app.textFields["lobbyName"].tap()
+        app.textFields["lobbyName"].typeText(
+            String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Office iPhone".count) + previous
+        )
+        app.buttons["Done"].tap()
+        button(app, "saveDeviceName").tap()
+    }
+
     @MainActor func testAutomaticConnectionRejectsInsecureAddressWithoutAlert() {
         let app = XCUIApplication()
         app.launch()

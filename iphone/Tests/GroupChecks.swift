@@ -56,6 +56,14 @@ struct GroupChecks {
                 })
             }
             for (index, client) in clients.enumerated() { client.name = "Phone \(index)" }
+            precondition(!clients[1].rename(""))
+            precondition(!clients[1].rename("   "))
+            precondition(!clients[1].rename(String(repeating: "x", count: 41)))
+            precondition(!clients[1].rename("Invalid\nName"))
+            clients[1].connect(settings)
+            precondition(clients[1].active)
+            precondition(clients[1].rename("Renamed Phone"))
+            precondition(!clients[1].active)
             defer { clients.forEach { $0.disconnect() } }
             let host = clients[0]
             if input.mode == "cancel" {
@@ -70,10 +78,13 @@ struct GroupChecks {
             host.connect(settings, startCall: true)
             try await wait { host.ownOffer != nil && clients[1].offers.count == 1 && !host.sending }
             precondition(clients[1].notification != nil)
+            precondition(!host.rename("Cannot change announced identity"))
             let offer = clients[1].offers[0]
             clients[1].request(offer)
             try await wait { host.candidates.count == 1 && !clients[1].sending }
             precondition(host.notification != nil)
+            precondition(host.candidates[0].exchange.request.name == "Renamed Phone")
+            precondition(!clients[1].rename("Cannot change pending identity"))
             host.approve(host.candidates[0])
             precondition(!host.inCall)
             clients[1].confirmCaller()
@@ -91,6 +102,7 @@ struct GroupChecks {
                 return
             }
             try await wait { host.members.count == 2 && clients[1].inCall && !host.sending }
+            precondition(!clients[1].rename("Cannot change active identity"))
             try await audio(Array(clients.prefix(2)))
 
             if input.mode == "reject" || input.mode == "ignore" {

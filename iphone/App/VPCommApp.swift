@@ -162,10 +162,23 @@ struct RelaySettingsView: View {
                     Button("Allow microphone for lock-screen calls") {
                         Task { _ = await AudioIO.permission() }
                     }.disabled(call.busy)
-                    TextField("Device name", text: $lobby.name)
+                    TextField("Device name", text: $call.deviceNameDraft)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("lobbyName").focused($editing)
-                        .disabled(call.busy || lobby.active)
+                        .disabled(call.busy || lobby.waiting)
+                    Button("Save name") {
+                        if call.saveDeviceName(call.deviceNameDraft) {
+                            call.deviceNameDraft = lobby.name
+                            editing = false
+                        }
+                    }
+                    .accessibilityIdentifier("saveDeviceName")
+                    .disabled(call.busy || lobby.waiting || call.deviceNameDraft == lobby.name)
+                    if let error = call.nameError {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
+                    Text("Saved on this iPhone. Used for future calls; verified peers may still see the name they saved.")
+                        .font(.caption).foregroundStyle(.secondary)
                     if lobby.active {
                         Text("Go offline before editing connection settings.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -275,7 +288,10 @@ struct RelaySettingsView: View {
                         : "Using your imported private CA. Verify its fingerprint first."))
             }
         }
-        .onAppear { call.settingsVisible = true }
+        .onAppear {
+            call.settingsVisible = true
+            call.deviceNameDraft = lobby.name
+        }
         .onDisappear {
             call.settingsVisible = false
             call.connectAutomatically()

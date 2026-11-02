@@ -64,6 +64,8 @@ final class CallStore: ObservableObject {
     @Published var address = "" { didSet { saveRelay() } }
     @Published var token = "" { didSet { saveRelay() } }
     @Published private(set) var settingsError: String?
+    @Published private(set) var nameError: String?
+    @Published var deviceNameDraft = ""
     @Published var callFailure: String?
     @Published var invitation = ""
     @Published var importCertificate = false
@@ -90,6 +92,9 @@ final class CallStore: ObservableObject {
     var settingsVisible = false
 
     init() {
+        if let name = UserDefaults.standard.string(forKey: "deviceName") {
+            lobby.rename(name)
+        }
         lobby.onAudioReady = { [weak self] in self?.systemCalls.mediaReady() }
         lobby.onCallClosed = { [weak self] call in self?.systemCalls.closed(call) }
         lobby.onDisconnected = { [weak self] in self?.systemCalls.disconnected() }
@@ -109,6 +114,24 @@ final class CallStore: ObservableObject {
         } catch {
             settingsError = "Could not read the saved relay. Unlock your iPhone and reopen the app."
         }
+    }
+
+    @discardableResult
+    func saveDeviceName(_ value: String) -> Bool {
+        guard !busy, !systemCalls.hasCall else {
+            nameError = "Finish the current call before changing your name."
+            return false
+        }
+        let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard lobby.rename(name) else {
+            nameError = lobby.waiting
+                ? "Finish or cancel the call request before changing your name."
+                : "Use 1-40 printable English characters."
+            return false
+        }
+        UserDefaults.standard.set(name, forKey: "deviceName")
+        nameError = nil
+        return true
     }
 
     private func saveRelay() {

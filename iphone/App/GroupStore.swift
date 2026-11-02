@@ -61,6 +61,17 @@ final class GroupStore: ObservableObject {
     var visibleCandidates: [LobbyCandidate] { candidates.filter { !ignored.contains($0.id) } }
     func trustedName(_ key: String) -> String? { trusted[scope + "|" + key] }
 
+    @discardableResult
+    func rename(_ value: String) -> Bool {
+        guard !waiting, !inCall, LobbyProtocol.nameValid(value),
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard name != value else { return true }
+        // Registration signs the name, so an idle connection must be replaced.
+        if active { disconnect("Device name saved. Return to Calls to reconnect.") }
+        name = value
+        return true
+    }
+
     func connect(_ settings: RelaySettings, startCall: Bool = false) {
         guard !active else { if startCall { announce() }; return }
         do {

@@ -62,7 +62,7 @@ If the administrator rotates the shared relay token, pair again.
 
 1. Upgrade the relay (`docker compose up -d --build`) and install the updated app
    on every phone. Keep the same WSS address and saved access token.
-2. Set a recognizable device name in **Settings**. On **Calls**, receivers
+2. Set a recognizable device name in **Settings**, then tap **Save name**. On **Calls**, receivers
    connect automatically and keep the app open. The caller taps **Start call**, which
    connects automatically if needed and announces the call.
 3. Other connected clients receive an in-app banner and a system alert sound
@@ -118,6 +118,10 @@ code** to help the caller complete their comparison.
 Use **Settings > Go offline** before editing connection settings. Settings are
 unavailable while a call or join request is active; finish or cancel it first.
 Automatic connection attempts pause in Settings and resume when you return to Calls.
+Device names can be edited without first going offline: **Save name** replaces the
+idle connection and remembers the name locally across launches. Use 1-40 printable
+English characters. Names cannot change during a call or pending join request.
+Previously verified peers may continue displaying the name they saved for your key.
 **Advanced > Reset saved settings >**
 **Forget verified peers** removes all saved peer trust (up to 100 keys across
 relays) while retaining your own device identity. In the same section, **Forget saved relay** deletes
