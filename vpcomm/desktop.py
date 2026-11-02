@@ -68,12 +68,12 @@ def run_window(args):
         return 1
 
     root = tk.Tk()
-    root.title("VPComm | Private audio")
+    root.title("Canddle | Private audio")
     root.geometry("740x550")
     root.minsize(650, 520)
     panel = ttk.Frame(root, padding=24)
     panel.pack(fill="both", expand=True)
-    ttk.Label(panel, text="VPComm", font=("", 24, "bold")).pack(anchor="w")
+    ttk.Label(panel, text="Canddle", font=("", 24, "bold")).pack(anchor="w")
     ttk.Label(panel, text="Two people. Your relay. End-to-end encrypted audio.").pack(
         anchor="w", pady=(4, 18)
     )

@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A00000000000000000000005"
-               BuildableName = "VPComm.app"
-               BlueprintName = "VPComm"
-               ReferencedContainer = "container:VPComm.xcodeproj">
+               BuildableName = "Canddle.app"
+               BlueprintName = "Canddle"
+               ReferencedContainer = "container:Canddle.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "B00000000000000000000001"
-               BuildableName = "VPCommUITests.xctest"
-               BlueprintName = "VPCommUITests"
-               ReferencedContainer = "container:VPComm.xcodeproj">
+               BuildableName = "CanddleUITests.xctest"
+               BlueprintName = "CanddleUITests"
+               ReferencedContainer = "container:Canddle.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -55,9 +55,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A00000000000000000000005"
-            BuildableName = "VPComm.app"
-            BlueprintName = "VPComm"
-            ReferencedContainer = "container:VPComm.xcodeproj">
+            BuildableName = "Canddle.app"
+            BlueprintName = "Canddle"
+            ReferencedContainer = "container:Canddle.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -72,9 +72,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A00000000000000000000005"
-            BuildableName = "VPComm.app"
-            BlueprintName = "VPComm"
-            ReferencedContainer = "container:VPComm.xcodeproj">
+            BuildableName = "Canddle.app"
+            BlueprintName = "Canddle"
+            ReferencedContainer = "container:Canddle.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

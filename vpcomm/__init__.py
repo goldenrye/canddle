@@ -1,1 +1,1 @@
-"""VPComm: an experimental, self-hosted audio calling system."""
+"""Canddle: an experimental, self-hosted audio calling system."""

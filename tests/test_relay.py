@@ -279,7 +279,7 @@ def test_client_requires_tls_except_loopback():
 
 async def test_tls_untrusted_rejected_and_private_ca_audio_succeeds(tmp_path):
     key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "VPComm test CA")])
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Canddle test CA")])
     now = datetime.now(UTC)
     certificate = (
         x509.CertificateBuilder()

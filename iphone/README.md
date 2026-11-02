@@ -1,8 +1,8 @@
 # iPhone Client
 
 The installed app is named **canddle** and uses the supplied six-can-and-flame
-artwork for its icon and in-app branding. The Xcode project/target remains
-`VPComm` and the bundle identifier is unchanged, preserving existing Keychain
+artwork for its icon and in-app branding. The Xcode project and target are named
+`Canddle`; the bundle identifier is unchanged, preserving existing Keychain
 settings when updating with the same signing identity.
 
 A fresh native SwiftUI implementation for iOS 16+, using only Apple frameworks.
@@ -16,9 +16,9 @@ are needed.
 
 ## Install
 
-1. Open `iphone/VPComm.xcodeproj` in Xcode 15 or newer.
-2. Select the **VPComm** target and open **Signing & Capabilities**.
-3. Select your development team. Change `org.vpcomm.iphone` to a unique bundle
+1. Open `iphone/Canddle.xcodeproj` in Xcode 15 or newer.
+2. Select the **Canddle** target and open **Signing & Capabilities**.
+3. Select your development team. Change `com.jpi.canddle` to a unique bundle
    identifier if required for your account.
 4. Connect your iPhone, select it as the run destination, enable Developer Mode
    when prompted, and click Run.
@@ -262,7 +262,7 @@ From the repository root:
 
 ```bash
 # Simulator build
-xcodebuild -project iphone/VPComm.xcodeproj -scheme VPComm \
+xcodebuild -project iphone/Canddle.xcodeproj -scheme Canddle \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath /tmp/vpcomm-iphone-build CODE_SIGNING_ALLOWED=NO build
 

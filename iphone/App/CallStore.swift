@@ -13,7 +13,7 @@ private struct SavedRelay: Codable {
     private static var query: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "VPComm") + ".relay",
+            kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "Canddle") + ".relay",
             kSecAttrAccount as String: "saved-relay",
             kSecAttrSynchronizable as String: false
         ]

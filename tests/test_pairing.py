@@ -159,7 +159,7 @@ async def test_admin_socket_create_revoke_permissions_and_cleanup(short_director
         )
         output, errors = await process.communicate()
         assert process.returncode == 0, errors
-        assert b"Scan in VPComm" in output and b"single use" in output
+        assert b"Scan in Canddle" in output and b"single use" in output
         assert TOKEN.encode() not in output
     assert not path.exists()
     assert not codes.codes

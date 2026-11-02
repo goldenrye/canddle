@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A00000000000000000000040 /* VPCommApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000030 /* VPCommApp.swift */; };
+		A00000000000000000000040 /* CanddleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000030 /* CanddleApp.swift */; };
 		A00000000000000000000041 /* CallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000031 /* CallStore.swift */; };
 		A00000000000000000000042 /* AudioIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000032 /* AudioIO.swift */; };
 		A00000000000000000000043 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000033 /* Protocol.swift */; };
@@ -29,19 +29,19 @@
 			containerPortal = A00000000000000000000001 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = A00000000000000000000005;
-			remoteInfo = VPComm;
+			remoteInfo = Canddle;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A00000000000000000000006 /* VPComm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = VPComm.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A00000000000000000000030 /* VPCommApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPCommApp.swift; sourceTree = "<group>"; };
+		A00000000000000000000006 /* Canddle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Canddle.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000030 /* CanddleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanddleApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000031 /* CallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000032 /* AudioIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioIO.swift; sourceTree = "<group>"; };
 		A00000000000000000000033 /* Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocol.swift; sourceTree = "<group>"; };
 		A00000000000000000000034 /* Relay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Relay.swift; sourceTree = "<group>"; };
 		A00000000000000000000035 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		B00000000000000000000003 /* VPCommUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = VPCommUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000003 /* CanddleUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = CanddleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000006 /* InterfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* PairingScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScanner.swift; sourceTree = "<group>"; };
 		D00000000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -77,8 +77,8 @@
 		A00000000000000000000004 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A00000000000000000000006 /* VPComm.app */,
-				B00000000000000000000003 /* VPCommUITests.xctest */,
+				A00000000000000000000006 /* Canddle.app */,
+				B00000000000000000000003 /* CanddleUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -92,7 +92,7 @@
 				E00000000000000000000006 /* LobbyView.swift */,
 				D00000000000000000000002 /* Assets.xcassets */,
 				C00000000000000000000002 /* PairingScanner.swift */,
-				A00000000000000000000030 /* VPCommApp.swift */,
+				A00000000000000000000030 /* CanddleApp.swift */,
 				A00000000000000000000031 /* CallStore.swift */,
 				A00000000000000000000032 /* AudioIO.swift */,
 				A00000000000000000000035 /* Info.plist */,
@@ -122,9 +122,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A00000000000000000000005 /* VPComm */ = {
+		A00000000000000000000005 /* Canddle */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A00000000000000000000007 /* Build configuration list for PBXNativeTarget "VPComm" */;
+			buildConfigurationList = A00000000000000000000007 /* Build configuration list for PBXNativeTarget "Canddle" */;
 			buildPhases = (
 				A00000000000000000000008 /* Sources */,
 				A00000000000000000000009 /* Frameworks */,
@@ -134,14 +134,14 @@
 			);
 			dependencies = (
 			);
-			name = VPComm;
-			productName = VPComm;
-			productReference = A00000000000000000000006 /* VPComm.app */;
+			name = Canddle;
+			productName = Canddle;
+			productReference = A00000000000000000000006 /* Canddle.app */;
 			productType = "com.apple.product-type.application";
 		};
-		B00000000000000000000001 /* VPCommUITests */ = {
+		B00000000000000000000001 /* CanddleUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B00000000000000000000004 /* Build configuration list for PBXNativeTarget "VPCommUITests" */;
+			buildConfigurationList = B00000000000000000000004 /* Build configuration list for PBXNativeTarget "CanddleUITests" */;
 			buildPhases = (
 				B00000000000000000000005 /* Sources */,
 			);
@@ -150,9 +150,9 @@
 			dependencies = (
 				B00000000000000000000010 /* PBXTargetDependency */,
 			);
-			name = VPCommUITests;
-			productName = VPCommUITests;
-			productReference = B00000000000000000000003 /* VPCommUITests.xctest */;
+			name = CanddleUITests;
+			productName = CanddleUITests;
+			productReference = B00000000000000000000003 /* CanddleUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -164,7 +164,7 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2710;
 			};
-			buildConfigurationList = A00000000000000000000002 /* Build configuration list for PBXProject "VPComm" */;
+			buildConfigurationList = A00000000000000000000002 /* Build configuration list for PBXProject "Canddle" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -177,8 +177,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A00000000000000000000005 /* VPComm */,
-				B00000000000000000000001 /* VPCommUITests */,
+				A00000000000000000000005 /* Canddle */,
+				B00000000000000000000001 /* CanddleUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -206,7 +206,7 @@
 				E00000000000000000000002 /* LobbyStore.swift in Sources */,
 				E00000000000000000000003 /* LobbyView.swift in Sources */,
 				C00000000000000000000001 /* PairingScanner.swift in Sources */,
-				A00000000000000000000040 /* VPCommApp.swift in Sources */,
+				A00000000000000000000040 /* CanddleApp.swift in Sources */,
 				A00000000000000000000041 /* CallStore.swift in Sources */,
 				A00000000000000000000042 /* AudioIO.swift in Sources */,
 				A00000000000000000000043 /* Protocol.swift in Sources */,
@@ -227,7 +227,7 @@
 /* Begin PBXTargetDependency section */
 		B00000000000000000000010 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = A00000000000000000000005 /* VPComm */;
+			target = A00000000000000000000005 /* Canddle */;
 			targetProxy = B00000000000000000000009 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -321,7 +321,7 @@
 				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_OBJC_WEAK = YES;
-				CODE_SIGN_ENTITLEMENTS = App/VPComm.entitlements;
+				CODE_SIGN_ENTITLEMENTS = App/Canddle.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 2U5R5BXJ37;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -345,7 +345,7 @@
 				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_OBJC_WEAK = YES;
-				CODE_SIGN_ENTITLEMENTS = App/VPComm.entitlements;
+				CODE_SIGN_ENTITLEMENTS = App/Canddle.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 2U5R5BXJ37;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -373,7 +373,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = org.vpcomm.iphone.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TARGETED_DEVICE_FAMILY = 1;
-				TEST_TARGET_NAME = VPComm;
+				TEST_TARGET_NAME = Canddle;
 			};
 			name = Debug;
 		};
@@ -387,14 +387,14 @@
 				PRODUCT_BUNDLE_IDENTIFIER = org.vpcomm.iphone.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TARGETED_DEVICE_FAMILY = 1;
-				TEST_TARGET_NAME = VPComm;
+				TEST_TARGET_NAME = Canddle;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A00000000000000000000002 /* Build configuration list for PBXProject "VPComm" */ = {
+		A00000000000000000000002 /* Build configuration list for PBXProject "Canddle" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A00000000000000000000010 /* Debug */,
@@ -403,7 +403,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A00000000000000000000007 /* Build configuration list for PBXNativeTarget "VPComm" */ = {
+		A00000000000000000000007 /* Build configuration list for PBXNativeTarget "Canddle" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A00000000000000000000012 /* Debug */,
@@ -412,7 +412,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B00000000000000000000004 /* Build configuration list for PBXNativeTarget "VPCommUITests" */ = {
+		B00000000000000000000004 /* Build configuration list for PBXNativeTarget "CanddleUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B00000000000000000000007 /* Debug */,

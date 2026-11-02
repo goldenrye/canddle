@@ -173,7 +173,7 @@ def main():
             qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, border=4)
             qr.add_data(json.dumps(response, separators=(",", ":")))
             qr.make(fit=True)
-            print("Scan in VPComm > Pair with QR. Expires in 2 minutes; single use.")
+            print("Scan in Canddle > Pair with QR. Expires in 2 minutes; single use.")
             print("Keep this screen private. Anyone scanning first can obtain relay access.")
             qr.print_ascii(out=sys.stdout, invert=True)
     except (OSError, ValueError):

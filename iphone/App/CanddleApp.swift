@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 import AudioToolbox
 
 @main
-struct VPCommApp: App {
+struct CanddleApp: App {
     @UIApplicationDelegateAdaptor(CallAppDelegate.self) private var appDelegate
     @StateObject private var call = CallStore.shared
     @Environment(\.scenePhase) private var phase
