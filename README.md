@@ -202,22 +202,22 @@ returning to Calls resumes them. Calls are never automatically started or rejoin
 One relay/token defines the group. Announcements are visible to every connected
 group client, but audio is encrypted separately for each admitted pair. Members
 can leave without ending the call; caller departure ends it for everyone. There
-is no extra port, database, or push service. Locked/backgrounded phones do not
-ring. Desktop clients and old iPhone clients retain manual two-person calling.
+is no extra public port. Optional APNs delivery uses a private device-registration
+database and enables locked/backgrounded iPhone ringing through PushKit and CallKit.
+Desktop clients and old iPhone clients retain manual two-person calling.
 Group raw-PCM bandwidth grows quadratically: about 3.81 GB/hour relay egress at
 six participants, before transport overhead.
 
 See the [iPhone guide](iphone/README.md) for installation, TLS setup, tests, and
 physical-device acceptance checks. Group microphones open after verified,
 caller-approved admission; manual calls require peer key confirmation.
-Backgrounding or audio interruption leaves the call (or ends it if you are caller).
+Accepted CallKit calls continue in the background; audio interruption ends the call.
 
 Before wider deployment: independent review of the audio and device-identity
 protocols, Opus compression, desktop echo cancellation, device lifecycle and
 network-change handling, stronger abuse controls, signed client releases,
 and a real-time media transport evaluation.
 
-iOS background calling and incoming-call UX need a separate design. CallKit
-and APNs can introduce Apple infrastructure and developer-program costs;
-foreground-only calls avoid relying on push delivery, but have usability
-limits. This client does not implement background ringing or push notifications.
+See [Background Calls](iphone/BACKGROUND_CALLS.md) to configure Apple provisioning,
+APNs credentials, and the optional deployment override. Real delivery requires
+physical-device verification; builds and mocked APNs tests are not sufficient.

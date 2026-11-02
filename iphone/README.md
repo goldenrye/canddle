@@ -7,7 +7,9 @@ settings when updating with the same signing identity.
 
 A fresh native SwiftUI implementation for iOS 16+, using only Apple frameworks.
 Manual calls work with the existing Python desktop client and relay. The
-foreground group calls require the updated server and iPhone app on every phone.
+group calls require the updated server and iPhone app on every phone.
+Background/lock-screen ringing uses optional APNs provisioning; see
+[Background Calls](BACKGROUND_CALLS.md) for setup, limitations and device tests.
 Optional QR pairing requires the updated relay and proxy configuration below.
 The source project is self-contained: no package downloads or project generator
 are needed.
@@ -80,7 +82,7 @@ If the administrator rotates the shared relay token, pair again.
    talking. Up to **six participants**, including the caller, are supported.
 7. Participants can **Leave call**; the caller can expand a participant's row to
    **Remove participant**, or use **End for everyone** in the bottom bar. The caller must remain connected. If the caller
-   disconnects, backgrounds, or locks the phone, the whole call ends. Another
+   disconnects, the whole call ends. Accepted CallKit calls continue while locked. Another
    participant leaving does not end the remaining participants' call.
 
 The group is the set of people provisioned with this relay's access token,
@@ -97,8 +99,9 @@ for a long time has less call time remaining. The app automatically reconnects
 to receive future calls on launch, foreground return, and return from Settings.
 While active, it checks every five seconds and retries disconnected listening
 connections. It never automatically restarts or rejoins a call; there is no host migration.
-Notifications are foreground-only: this does not ring a locked/backgrounded
-iPhone and does not implement APNs, PushKit, or CallKit.
+With APNs configured and the app properly provisioned, PushKit wakes a
+backgrounded/locked iPhone and CallKit presents the incoming call. Without APNs,
+announcements remain foreground-only. See [Background Calls](BACKGROUND_CALLS.md).
 
 Group v2 uses a persistent socket and caller-signed membership epochs with
 separate encryption keys between each pair of phones. Phones mix audio locally;
@@ -120,7 +123,7 @@ Automatic connection attempts pause in Settings and resume when you return to Ca
 relays) while retaining your own device identity. In the same section, **Forget saved relay** deletes
 the relay address/token, not the separate device identity or peer trust. These
 Keychain entries may survive reinstall, are not synced to iCloud, and are
-accessible only while the device is unlocked. Invitations and ephemeral
+accessible after the first unlock following reboot. Invitations and ephemeral
 encryption keys are never stored. Failed trust writes prevent confirmation or
 approval, rather than silently treating the peer as verified.
 
@@ -139,14 +142,15 @@ compatibility tests; desktop manual calls still work with the relay. The current
 iPhone interface is group-call only.
 
 The address and token are stored together in the iPhone Keychain, accessible
-only while unlocked, without iCloud synchronization or migration to another
+after the first unlock following reboot, without iCloud synchronization or migration to another
 device. Use **Forget saved relay** to delete them. Keychain data may survive
 app deletion, so explicitly forget it before removing the app when needed.
 If saving fails, the app displays a warning instead of claiming it was saved.
-Invitations and session keys are never saved. Private CA imports still need to
-be repeated after the app process exits.
+Invitations and session keys are never saved. Imported public CA certificates
+persist with the relay credentials so a push-launched app can validate its server.
 
-Switching apps keeps saved relay details, but backgrounding ends a group call.
+Accepted CallKit group calls continue when switching apps or locking the phone.
+Keep the caller foregrounded while waiting for the first admission.
 
 ## TLS and Private Certificates
 
@@ -172,8 +176,8 @@ For the Caddy private-CA deployment:
 
 5. Use the exact hostname or IP covered by the server certificate.
 
-The imported CA is trusted only inside this app and only until it is removed
-or the process exits. With a private CA selected, system trust roots are not
+The imported CA is trusted only inside this app and persists until removed.
+With a private CA selected, system trust roots are not
 used for the connection. Hostname, validity, and chain verification still apply.
 Network fetching during private-CA evaluation is disabled; the server must
 send its necessary intermediate certificates.
@@ -184,13 +188,13 @@ No relay address, access token, invitation, or CA private key is bundled.
 
 ## Behavior and Privacy
 
-- Foreground-only calls. Backgrounding or locking ends the call; the screen
-  stays awake during an active call. There is no background-audio entitlement.
+- Accepted group calls use CallKit-managed background audio. Incoming locked-screen
+  ringing requires APNs configuration and Apple push provisioning.
 - Audio interruptions, removal of an audio device, and audio-service resets end the call.
   Connect your preferred headphones before starting.
 - A brief inactive state obscures the interface but does not alone hang up.
-  Transitioning to the background does.
-- No CallKit, APNs, background ringing, system contacts, automatic call rejoining, or accounts.
+  Backgrounding closes idle signaling sockets, not accepted CallKit audio.
+- No system contacts, automatic call rejoining, or accounts.
 - The lobby exposes call availability, public device keys, names, and request/
   approval timing to the relay. All online lobby peers see announcements.
 - No app-managed recording, analytics, or cloud storage. Relay details persist
@@ -223,7 +227,8 @@ against the current I/O formats and attempt restart, at most three times per cal
 spaced by 250 ms with a two-second window per stop. While recovering, playback is
 dropped and capture waits; the encrypted connections and mute setting remain.
 Old graph queues are discarded. Interruption, device removal, audio-service loss/
-reset, backgrounding, and explicit shutdown prohibit restart. Exhausting the
+reset, and explicit shutdown prohibit restart. Legacy non-CallKit audio also
+stops on backgrounding. Exhausting the
 budget ends the call with a distinct error instead of an unlimited retry loop.
 Native tests exercise the recovery policy with a simulated engine; physical
 voice-processing route changes still require device acceptance testing.

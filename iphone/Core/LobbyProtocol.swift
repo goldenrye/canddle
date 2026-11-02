@@ -109,6 +109,25 @@ struct LobbyRequest: Identifiable {
     }
 }
 
+struct IncomingCallPush {
+    let offer: LobbyOffer
+
+    init(_ payload: [AnyHashable: Any], scope: String, recipient: String,
+         now: TimeInterval = Date().timeIntervalSince1970) throws {
+        guard payload["v"] as? Int == 1,
+              payload["scope"] as? String == scope,
+              payload["recipient"] as? String == recipient,
+              let expires = payload["expires"] as? Double,
+              expires.isFinite, expires >= now, expires <= now + 60,
+              let message = payload["offer"] as? [String: String],
+              message.count == 6, message.values.allSatisfy({ $0.utf8.count <= 256 }) else {
+            throw VoiceError.packet
+        }
+        offer = try LobbyOffer(message)
+        guard offer.identity != recipient else { throw VoiceError.peer }
+    }
+}
+
 struct LobbyExchange {
     let offer: LobbyOffer
     let request: LobbyRequest

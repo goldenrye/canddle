@@ -21,6 +21,12 @@ final class GroupStore: ObservableObject {
     @Published private(set) var notificationID = UUID()
     var onAudioReady: (() -> Void)?
     var onAudioEnded: ((String) -> Void)?
+    var onCallClosed: ((String) -> Void)?
+    var onDisconnected: (() -> Void)?
+    var pushToken: String?
+    var pushEnvironment = "development"
+    @Published private(set) var pushStatus = "Background ringing requires Apple push provisioning."
+    private var pushAvailable = false
     private let loadIdentity: () throws -> LobbyIdentity
     private let saveIdentity: (LobbyIdentity) throws -> Void
     private var identity: LobbyIdentity?
@@ -81,6 +87,9 @@ final class GroupStore: ObservableObject {
                     guard generation == id else { return }
                     online = true
                     status = "Online. Start a call or join an announced call."
+                    if pushToken != nil {
+                        try await relay.groupSend(["type": "push-capabilities"])
+                    }
                     heartbeat = Task {
                         do {
                             while !Task.isCancelled {
@@ -127,10 +136,27 @@ final class GroupStore: ObservableObject {
         offers = []; active = false; online = false; sending = false
         autoStart = false
         status = message
+        pushAvailable = false
+        onDisconnected?()
+    }
+
+    func updatePushToken(_ token: String?) {
+        pushToken = token
+        guard online, let transport else { return }
+        Task {
+            do {
+                if token == nil {
+                    try await transport.groupSend(["type": "push-unregister"])
+                } else {
+                    try await transport.groupSend(["type": "push-capabilities"])
+                }
+            } catch { pushStatus = "Push registration failed. Reconnect to retry." }
+        }
     }
 
     private func clearCall(_ message: String) {
         let hadAudio = inCall
+        let endedCall = ownOffer?.id ?? joining?.offer.id
         deadline?.cancel(); deadline = nil
         ownOffer = nil; joining = nil; confirmed = false
         members = []; candidates = []; ignored = []; departed = []
@@ -140,6 +166,7 @@ final class GroupStore: ObservableObject {
         notification = nil
         status = message
         if hadAudio { onAudioEnded?(message) }
+        if let endedCall { onCallClosed?(endedCall) }
     }
 
     private func notify(_ text: String) {
@@ -321,6 +348,22 @@ final class GroupStore: ObservableObject {
 
     private func receive(_ message: [String: String]) throws {
         switch message["type"] {
+        case "push-capabilities":
+            pushAvailable = message["enabled"] == "yes"
+            if pushAvailable, let pushToken, let transport {
+                Task {
+                    do {
+                        try await transport.groupSend([
+                            "type": "push-register", "token": pushToken,
+                            "environment": pushEnvironment, "scope": scope
+                        ])
+                    } catch { pushStatus = "Push registration failed. Reconnect to retry." }
+                }
+            } else { pushStatus = "This relay has not enabled background ringing." }
+        case "push-registered":
+            pushStatus = "Background ringing registered with this relay."
+        case "push-unregistered":
+            pushStatus = "Background ringing registration removed."
         case "pong": break
         case "offer":
             let offer = try LobbyOffer(message)
@@ -393,6 +436,7 @@ final class GroupStore: ObservableObject {
             }
         case "closed":
             guard let call = message["call"] else { throw VoiceError.packet }
+            onCallClosed?(call)
             offers.removeAll { $0.id == call }
             if call == ownOffer?.id || call == joining?.offer.id {
                 clearCall("Call ended or expired.")

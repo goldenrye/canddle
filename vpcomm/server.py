@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import signal
 import time
 from dataclasses import dataclass, field
@@ -16,9 +17,11 @@ from http import HTTPStatus
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+from .crypto import encode
 from .group import GroupLobby
-from .lobby import Lobby
+from .lobby import Lobby, name_valid, transcript, verify
 from .pairing import PairingCodes, admin_socket
+from .push import from_environment
 
 LOG = logging.getLogger("vpcomm")
 ROOM_PATTERN = re.compile(r"[A-Za-z0-9_-]{22}")
@@ -40,6 +43,7 @@ class Relay:
         wait_timeout: float = 120,
         call_timeout: float = 3600,
         pairing: PairingCodes | None = None,
+        push=None,
     ):
         if len(access_token) < 32 or not access_token.isascii():
             raise ValueError("Access token must be at least 32 ASCII characters")
@@ -53,7 +57,7 @@ class Relay:
         self.connections = 0
         self.pairing = pairing
         self.lobby = Lobby()
-        self.group = GroupLobby()
+        self.group = GroupLobby(push=push)
 
     def authorize(self, connection, request):
         if request.path == "/pair":
@@ -109,6 +113,9 @@ class Relay:
             if not isinstance(raw, str) or len(raw) > 128:
                 raise ValueError("Invalid join")
             request = json.loads(raw)
+            if request == {"v": 2, "push": True}:
+                await self.revoke_push(socket)
+                return
             if request == {"v": 2, "group": True}:
                 await self.group.handle(socket)
                 return
@@ -179,6 +186,30 @@ class Relay:
                 if self.rooms.get(room_id) is room:
                     self.rooms.pop(room_id)
 
+    async def revoke_push(self, socket):
+        """Short-lived signed control session, independent of online lobby presence."""
+        async with asyncio.timeout(10):
+            nonce = encode(secrets.token_bytes(32))
+            await socket.send(json.dumps({"type": "challenge", "challenge": nonce}))
+            hello = Lobby.parse(await socket.recv())
+            if (
+                set(hello) != {"type", "identity", "name", "signature"}
+                or hello["type"] != "register"
+                or not name_valid(hello["name"])
+            ):
+                raise ValueError("Invalid push control registration")
+            verify(
+                hello["identity"],
+                hello["signature"],
+                transcript("register", nonce, hello["identity"], hello["name"]),
+            )
+            await socket.send('{"type":"online"}')
+            if Lobby.parse(await socket.recv()) != {"type": "push-unregister"}:
+                raise ValueError("Push control supports only revocation")
+            if self.group.push:
+                self.group.push.devices.remove(hello["identity"])
+            await socket.send('{"type":"push-unregistered"}')
+
 
 def build_server(relay: Relay, host: str, port: int):
     return serve(
@@ -204,6 +235,7 @@ async def run(args):
     token = os.environ.get("VPCOMM_ACCESS_TOKEN", "")
     public_url = os.environ.get("VPCOMM_PUBLIC_RELAY_URL", "")
     pairing = PairingCodes(public_url) if public_url else None
+    push = from_environment(token)
     if pairing and (len(token) > 4096 or any(not 33 <= ord(char) <= 126 for char in token)):
         raise ValueError("Pairing requires a token of at most 4096 printable ASCII characters")
     relay = Relay(
@@ -212,6 +244,7 @@ async def run(args):
         wait_timeout=args.wait_timeout,
         call_timeout=args.call_timeout,
         pairing=pairing,
+        push=push,
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -219,6 +252,9 @@ async def run(args):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
     async with contextlib.AsyncExitStack() as stack:
+        if push:
+            push.start()
+            stack.push_async_callback(push.close)
         if pairing:
             await stack.enter_async_context(
                 admin_socket(

@@ -30,13 +30,15 @@ struct LobbyIdentity: Codable {
         guard status == errSecSuccess, let data = result as? Data else {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
-        return try JSONDecoder().decode(Self.self, from: data)
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        try value.save() // Migrate existing unlocked-only entries for locked call answering.
+        return value
     }
 
     func save() throws {
         let values: [String: Any] = [
             kSecValueData as String: try JSONEncoder().encode(self),
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         var status = SecItemUpdate(Self.query as CFDictionary, values as CFDictionary)
         if status == errSecItemNotFound {

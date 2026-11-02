@@ -220,11 +220,23 @@ final class Relay {
         return reply.token
     }
 
-    func openLobby(identity: Curve25519.Signing.PrivateKey, name: String, group: Bool = false) async throws {
+    func unregisterPush(identity: Curve25519.Signing.PrivateKey) async throws {
+        defer { stop() }
+        try await openLobby(identity: identity, name: "Push control", pushControl: true)
+        try await lobbySend(["type": "push-unregister"])
+        guard try await lobbyReceive(seconds: 10) == ["type": "push-unregistered"] else {
+            throw VoiceError.packet
+        }
+    }
+
+    func openLobby(identity: Curve25519.Signing.PrivateKey, name: String, group: Bool = false,
+                   pushControl: Bool = false) async throws {
         guard LobbyProtocol.nameValid(name), !ended else { throw VoiceError.packet }
         if group { socket.maximumMessageSize = 8192 }
         socket.resume()
-        try await send(.string(group ? "{\"v\":2,\"group\":true}" : "{\"v\":1,\"lobby\":true}"), seconds: 10)
+        let hello = pushControl ? "{\"v\":2,\"push\":true}"
+            : (group ? "{\"v\":2,\"group\":true}" : "{\"v\":1,\"lobby\":true}")
+        try await send(.string(hello), seconds: 10)
         let challenge = try await lobbyReceive(seconds: 10)
         guard challenge["type"] == "challenge", let nonce = challenge["challenge"] else {
             throw VoiceError.packet

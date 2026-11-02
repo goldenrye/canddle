@@ -10,5 +10,8 @@ dist/
 .env
 *.pem
 *.key
+*.p8
+*.sqlite
+*.sqlite-*
 *.crt
 .DS_Store

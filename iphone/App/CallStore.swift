@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import CryptoKit
 import Foundation
 import Security
 import UIKit
@@ -7,6 +8,7 @@ import UIKit
 private struct SavedRelay: Codable {
     let address: String
     let token: String
+    var root: Data? = nil
 
     private static var query: [String: Any] {
         [
@@ -27,13 +29,15 @@ private struct SavedRelay: Codable {
         guard status == errSecSuccess, let data = result as? Data else {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
-        return try JSONDecoder().decode(SavedRelay.self, from: data)
+        let saved = try JSONDecoder().decode(SavedRelay.self, from: data)
+        try saved.save()
+        return saved
     }
 
     func save() throws {
         let values: [String: Any] = [
             kSecValueData as String: try JSONEncoder().encode(self),
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         var status = SecItemUpdate(Self.query as CFDictionary, values as CFDictionary)
         if status == errSecItemNotFound {
@@ -54,7 +58,9 @@ private struct SavedRelay: Codable {
 
 @MainActor
 final class CallStore: ObservableObject {
+    static let shared = CallStore()
     let lobby = GroupStore()
+    lazy var systemCalls = SystemCalls(owner: self)
     @Published var address = "" { didSet { saveRelay() } }
     @Published var token = "" { didSet { saveRelay() } }
     @Published private(set) var settingsError: String?
@@ -80,10 +86,13 @@ final class CallStore: ObservableObject {
     private var clipboardValue: String?
     private var clearingRelay = false
     private var scannedQR: String?
+    private var registeredRelay: SavedRelay?
     var settingsVisible = false
 
     init() {
-        lobby.onAudioReady = { [weak self] in self?.startGroupAudio() }
+        lobby.onAudioReady = { [weak self] in self?.systemCalls.mediaReady() }
+        lobby.onCallClosed = { [weak self] call in self?.systemCalls.closed(call) }
+        lobby.onDisconnected = { [weak self] in self?.systemCalls.disconnected() }
         lobby.onAudioEnded = { [weak self] message in
             guard let self, self.groupAudio else { return }
             self.task?.cancel()
@@ -93,6 +102,9 @@ final class CallStore: ObservableObject {
             if let saved = try SavedRelay.load() {
                 address = saved.address
                 token = saved.token
+                root = saved.root
+                rootFingerprint = saved.root.map(RelaySettings.fingerprint)
+                registeredRelay = saved
             }
         } catch {
             settingsError = "Could not read the saved relay. Unlock your iPhone and reopen the app."
@@ -101,9 +113,13 @@ final class CallStore: ObservableObject {
 
     private func saveRelay() {
         guard !clearingRelay else { return }
+        if let saved = registeredRelay, saved.address != address || saved.token != token {
+            registeredRelay = nil
+            revokePush(saved)
+        }
         if lobby.active { lobby.disconnect("Relay settings changed. Return to Calls to reconnect.") }
         do {
-            try SavedRelay(address: address, token: token).save()
+            try SavedRelay(address: address, token: token, root: root).save()
             settingsError = nil
         } catch {
             settingsError = "Could not save relay details securely. Your edits are only in memory."
@@ -112,17 +128,33 @@ final class CallStore: ObservableObject {
 
     func forgetRelay() {
         guard !busy else { return }
+        if let saved = try? SavedRelay.load() { revokePush(saved) }
         lobby.disconnect()
         do {
             try SavedRelay.remove()
             clearingRelay = true
             address = ""
             token = ""
+            root = nil
+            rootFingerprint = nil
             clearingRelay = false
             settingsError = nil
             status = "Saved relay forgotten."
         } catch {
             settingsError = "Could not delete the saved relay. Unlock your iPhone and try again."
+        }
+    }
+
+    private func revokePush(_ saved: SavedRelay) {
+        guard let settings = try? RelaySettings(address: saved.address, token: saved.token, root: saved.root),
+              let identity = try? LobbyIdentity.load(),
+              let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: identity.secret) else { return }
+        Task {
+            do { try await Relay(settings).unregisterPush(identity: key) }
+            catch {
+                settingsError = "Old relay push registration could not be removed. "
+                    + "It expires within seven days; ask its administrator to revoke it sooner."
+            }
         }
     }
 
@@ -173,7 +205,11 @@ final class CallStore: ObservableObject {
                 guard generation == id else { return }
                 // Commit both values before changing the UI. A failed write preserves
                 // the old saved relay and must not claim successful pairing.
-                try SavedRelay(address: ticket.relay, token: received).save()
+                let previous = try SavedRelay.load()
+                try SavedRelay(address: ticket.relay, token: received, root: root).save()
+                if let previous, previous.address != ticket.relay || previous.token != received {
+                    revokePush(previous)
+                }
                 clearingRelay = true
                 address = ticket.relay
                 token = received
@@ -216,6 +252,7 @@ final class CallStore: ObservableObject {
             let der = try RelaySettings.certificate(Data(contentsOf: url))
             root = der
             rootFingerprint = RelaySettings.fingerprint(der)
+            saveRelay()
             status = "Private CA loaded. Verify its fingerprint with your administrator."
         } catch { status = "Choose a single PEM or DER public root certificate." }
     }
@@ -225,6 +262,7 @@ final class CallStore: ObservableObject {
         lobby.disconnect()
         root = nil
         rootFingerprint = nil
+        saveRelay()
         status = "Using standard iOS certificate trust."
     }
 
@@ -239,6 +277,7 @@ final class CallStore: ObservableObject {
         guard !busy else { return }
         do {
             let settings = try RelaySettings(address: address, token: token, root: root)
+            registeredRelay = SavedRelay(address: address, token: token, root: root)
             lobby.connect(settings, startCall: startCall)
         } catch {
             status = (error as? VoiceError)?.errorDescription ?? "Check relay settings."
@@ -250,7 +289,7 @@ final class CallStore: ObservableObject {
         }
     }
 
-    private func startGroupAudio() {
+    func startGroupAudio() {
         guard !busy else { return }
         let id = UUID()
         generation = id
@@ -266,7 +305,7 @@ final class CallStore: ObservableObject {
                 let audio = AudioIO()
                 self.audio = audio
                 status = "Starting group microphone and speaker..."
-                try audio.start()
+                try audio.start(managedByCallKit: true)
                 connected = true
                 status = "Encrypted group audio. Everyone listed can hear and speak."
                 UIApplication.shared.isIdleTimerDisabled = true
@@ -419,12 +458,20 @@ final class CallStore: ObservableObject {
     }
 
     func background() {
-        lobby.disconnect("Offline while canddle is in the background. Reconnects when you return.")
-        hangUp("Call ended because canddle left the foreground.")
+        if !systemCalls.hasCall {
+            lobby.disconnect("Listening for incoming calls through Apple push.")
+            hangUp("Call ended because canddle left the foreground.")
+        }
         scannedQR = nil
         scanningPairing = false
         pairingTicket = nil
         // Unused invitations remain in memory so switching apps to share them works.
+    }
+
+    func endSystemCall() {
+        task?.cancel()
+        lobby.disconnect("Call ended.")
+        if busy { finish(generation, message: "Call ended.") }
     }
 
     private func finish(_ id: UUID, message: String) {

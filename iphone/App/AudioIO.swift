@@ -241,7 +241,10 @@ final class AudioIO {
         }
     }
 
-    func start() throws {
+    private var managedByCallKit = false
+
+    func start(managedByCallKit: Bool = false) throws {
+        self.managedByCallKit = managedByCallKit
         var stage = "configure the audio session"
         do {
             let session = AVAudioSession.sharedInstance()
@@ -250,7 +253,7 @@ final class AudioIO {
             try session.setPreferredSampleRate(48000)
             try session.setPreferredIOBufferDuration(0.02)
             stage = "activate the audio session"
-            try session.setActive(true)
+            if !managedByCallKit { try session.setActive(true) }
             active = true
             recovery.begin()
             observeSession()
@@ -313,11 +316,12 @@ final class AudioIO {
 
     private func observeSession() {
         let gate = recovery.gate
-        for event in [AVAudioSession.interruptionNotification,
+        var events = [AVAudioSession.interruptionNotification,
                       AVAudioSession.routeChangeNotification,
                       AVAudioSession.mediaServicesWereLostNotification,
-                      AVAudioSession.mediaServicesWereResetNotification,
-                      UIApplication.didEnterBackgroundNotification] {
+                      AVAudioSession.mediaServicesWereResetNotification]
+        if !managedByCallKit { events.append(UIApplication.didEnterBackgroundNotification) }
+        for event in events {
             sessionObservers.append(NotificationCenter.default.addObserver(
                 forName: event, object: nil, queue: nil
             ) { note in
@@ -379,7 +383,9 @@ final class AudioIO {
         player.stop()
         engine.stop()
         if active {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if !managedByCallKit {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
             active = false
         }
     }

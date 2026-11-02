@@ -1,0 +1,16 @@
+# Use with compose.yaml. Keep the .p8 file outside the repository.
+services:
+  relay:
+    environment:
+      VPCOMM_APNS_KEY_FILE: /run/secrets/apns.p8
+      VPCOMM_APNS_KEY_ID: ${VPCOMM_APNS_KEY_ID:?Set the Apple APNs key ID}
+      VPCOMM_APNS_TEAM_ID: ${VPCOMM_APNS_TEAM_ID:?Set the Apple team ID}
+      VPCOMM_APNS_BUNDLE_ID: ${VPCOMM_APNS_BUNDLE_ID:?Set the signed iPhone bundle ID}
+      VPCOMM_PUSH_DB: /var/lib/vpcomm/push.sqlite
+    volumes:
+      - ${VPCOMM_APNS_KEY_FILE:?Set an absolute external .p8 path}:/run/secrets/apns.p8:ro
+      - ${VPCOMM_PUSH_DATA_DIR:?Set an absolute push data directory}:/var/lib/vpcomm
+    networks: [backend, push_egress]
+
+networks:
+  push_egress:

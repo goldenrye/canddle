@@ -337,11 +337,20 @@ Control messages retain the 12-message burst / 2-per-second refill. Queues hold
 an epoch. Sends time out at three seconds. Fifteen-second heartbeats and
 45-second inactivity deadlines remain. These bounds do not prevent DDoS.
 
-Foreground banner/sound notifications are local UI behavior; there is no APNs,
-PushKit, CallKit or background ringing. Configured iPhones automatically open
+Optional APNs VoIP delivery and CallKit provide background/lock-screen ringing.
+Apple receives signed public offer metadata, relay URL, recipient public key and
+expiry, but no bearer credentials, private keys or audio. Registrations use
+authenticated device sessions, a private bounded SQLite store, seven-day expiry,
+access-token rotation revocation, and invalid-token removal. Delivery is bounded
+and best-effort. See [Background Calls](iphone/BACKGROUND_CALLS.md).
+Configured iPhones automatically open
 the authenticated group connection while active on Calls, retrying disconnected
 listeners every five seconds. Settings pauses automatic attempts; backgrounding
-disconnects. Reconnection never restores call membership or starts the microphone.
+disconnects idle sockets. Accepted CallKit audio continues while locked.
+Reconnection never restores call membership or starts the microphone.
+Keychain credentials, public CA trust, identity and verified peers are now
+device-only, accessible after first unlock, to support push-launched call answering.
+CallKit answer does not bypass first-time identity verification or caller approval.
 The relay learns identities, roster
 membership, names, call timing and traffic volume. A malicious relay can deny
 service or suppress updates; authentication does not guarantee delivery, a

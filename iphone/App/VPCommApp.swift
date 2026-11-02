@@ -4,7 +4,8 @@ import AudioToolbox
 
 @main
 struct VPCommApp: App {
-    @StateObject private var call = CallStore()
+    @UIApplicationDelegateAdaptor(CallAppDelegate.self) private var appDelegate
+    @StateObject private var call = CallStore.shared
     @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
@@ -157,6 +158,10 @@ struct RelaySettingsView: View {
         Group {
             Form {
                 Section("Your device") {
+                    Text(lobby.pushStatus).font(.caption).foregroundStyle(.secondary)
+                    Button("Allow microphone for lock-screen calls") {
+                        Task { _ = await AudioIO.permission() }
+                    }.disabled(call.busy)
                     TextField("Device name", text: $lobby.name)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("lobbyName").focused($editing)
@@ -217,8 +222,8 @@ struct RelaySettingsView: View {
                 }.disabled(call.busy || lobby.active)
                 Section {
                     DisclosureGroup("Privacy & limits") {
-                        Text("Keep this app open. Backgrounding, locking, or removing an audio device "
-                             + "ends the call. Saved relay details are kept for your next call.")
+                        Text("Accepted calls continue while locked. Background ringing requires "
+                             + "Apple push setup on this app and relay. Audio interruptions end calls.")
                         Text("Group microphones start after verified caller acceptance. The caller controls "
                              + "who joins; check the participant list. Verify new device codes through "
                              + "a trusted channel. Headphones are recommended.")

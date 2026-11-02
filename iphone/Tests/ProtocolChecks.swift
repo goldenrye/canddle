@@ -56,6 +56,25 @@ struct ProtocolChecks {
         let signingA = Curve25519.Signing.PrivateKey(), signingB = Curve25519.Signing.PrivateKey()
         let ephemeralA = Curve25519.KeyAgreement.PrivateKey(), ephemeralB = Curve25519.KeyAgreement.PrivateKey()
         let offer = try LobbyOffer.create(identity: signingA, name: "Alice", ephemeral: ephemeralA)
+        let receiver = VoiceProtocol.base64(signingB.publicKey.rawRepresentation)
+        let push: [AnyHashable: Any] = [
+            "v": 1, "scope": "wss://example.com/relay", "recipient": receiver,
+            "offer": offer.message, "expires": 1030.0
+        ]
+        let parsedPush = try IncomingCallPush(push, scope: "wss://example.com/relay",
+                                              recipient: receiver, now: 1000)
+        precondition(parsedPush.offer.message == offer.message)
+        for (field, value): (AnyHashable, Any) in [
+            ("v", 2), ("scope", "wss://other.example/relay"), ("recipient", offer.identity),
+            ("expires", 999.0), ("expires", 1061.0), ("expires", Double.nan),
+            ("offer", ["type": "offer"]), ("offer", offer.message.merging(["name": "Impostor"]) { _, b in b })
+        ] {
+            var bad = push
+            bad[field] = value
+            try rejects {
+                _ = try IncomingCallPush(bad, scope: "wss://example.com/relay", recipient: receiver, now: 1000)
+            }
+        }
         let request = try LobbyRequest.create(offer: offer, identity: signingB, name: "Bob", ephemeral: ephemeralB)
         let caller = try LobbyExchange(offer: offer, request: request, ephemeral: ephemeralA, caller: true)
         let joiner = try LobbyExchange(offer: offer, request: request, ephemeral: ephemeralB, caller: false)

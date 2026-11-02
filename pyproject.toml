@@ -7,7 +7,7 @@ name = "vpcomm"
 version = "0.1.0"
 description = "Self-hosted, end-to-end encrypted two-person audio prototype"
 requires-python = ">=3.11"
-dependencies = ["websockets>=15.0.1,<16", "cryptography>=46,<47", "qrcode>=8.2,<9"]
+dependencies = ["websockets>=15.0.1,<16", "cryptography>=46,<47", "qrcode>=8.2,<9", "httpx[http2]>=0.28,<0.29"]
 
 [project.optional-dependencies]
 desktop = ["sounddevice>=0.5.3,<0.6"]

@@ -11,8 +11,9 @@ from .lobby import Lobby, transcript, verify
 class GroupLobby(Lobby):
     MAX_MEMBERS = 6
 
-    def __init__(self, **kwargs):
+    def __init__(self, push=None, **kwargs):
         super().__init__(**kwargs)
+        self.push = push
         self.members = {}
         self.revisions = {}
         self.paused = set()
@@ -61,6 +62,22 @@ class GroupLobby(Lobby):
 
     def dispatch(self, peer, message):
         kind = message.get("type")
+        if kind == "push-capabilities" and set(message) == {"type"}:
+            peer.emit({"type": "push-capabilities", "enabled": "yes" if self.push else "no"})
+            return
+        if kind == "push-register":
+            if set(message) != {"type", "token", "environment", "scope"} or not self.push:
+                raise ValueError("Push registration unavailable")
+            self.push.devices.register(
+                peer.identity, message["token"], message["environment"], message["scope"]
+            )
+            peer.emit({"type": "push-registered"})
+            return
+        if kind == "push-unregister" and set(message) == {"type"}:
+            if self.push:
+                self.push.devices.remove(peer.identity)
+            peer.emit({"type": "push-unregistered"})
+            return
         if kind in {"offer", "request"} and peer.joined:
             raise ValueError("Already in a call")
         if kind == "approve":
@@ -84,6 +101,8 @@ class GroupLobby(Lobby):
             self.members[call] = {peer.identity: message}
             self.revisions[call] = 0
             peer.joined = call
+            if self.push:
+                self.push.announce(message, lambda: call in self.offers)
         elif kind == "request" and peer.request:
             call, request = peer.request
             self.request_timers[(call, request)] = asyncio.get_running_loop().call_later(
