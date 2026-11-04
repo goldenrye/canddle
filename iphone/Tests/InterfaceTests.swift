@@ -56,6 +56,52 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(button(app, "importCA").exists)
     }
 
+    @MainActor private func requestMicrophone(_ app: XCUIApplication, allow: Bool) {
+        app.resetAuthorizationStatus(for: .microphone)
+        app.launch()
+        settings(app)
+        XCTAssertTrue(app.staticTexts["microphoneNotRequested"].exists)
+        button(app, "requestMicrophone").tap()
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertEqual(alert.buttons.count, 2)
+        // The system alert presents denial first and permission second.
+        alert.buttons.element(boundBy: allow ? 1 : 0).tap()
+    }
+
+    @MainActor func testMicrophoneGrantShowsAllowedStatus() {
+        let app = XCUIApplication()
+        defer { app.terminate(); app.resetAuthorizationStatus(for: .microphone) }
+        requestMicrophone(app, allow: true)
+        XCTAssertTrue(app.descendants(matching: .any)["microphoneAllowed"].firstMatch
+            .waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["requestMicrophone"].exists)
+        XCTAssertFalse(app.buttons["microphoneSettings"].exists)
+        app.terminate()
+        app.launch()
+        settings(app)
+        XCTAssertTrue(app.descendants(matching: .any)["microphoneAllowed"].firstMatch.exists)
+    }
+
+    @MainActor func testMicrophoneDenialOffersSettingsInsteadOfRepeatingPrompt() {
+        let app = XCUIApplication()
+        defer { app.terminate(); app.resetAuthorizationStatus(for: .microphone) }
+        requestMicrophone(app, allow: false)
+        XCTAssertTrue(app.staticTexts["microphoneDenied"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["requestMicrophone"].exists)
+        XCTAssertTrue(app.buttons["microphoneSettings"].isEnabled)
+        app.buttons["microphoneSettings"].tap()
+        let systemSettings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+        XCTAssertTrue(systemSettings.wait(for: .runningForeground, timeout: 5))
+        let microphone = systemSettings.switches["Microphone"]
+        XCTAssertTrue(microphone.waitForExistence(timeout: 5))
+        microphone.tap()
+        app.activate()
+        XCTAssertTrue(app.descendants(matching: .any)["microphoneAllowed"].firstMatch
+            .waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["microphoneSettings"].exists)
+    }
+
     @MainActor func testDeviceNameCanBeChangedAndSurvivesRelaunch() {
         let app = XCUIApplication()
         app.launch()

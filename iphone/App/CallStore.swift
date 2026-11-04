@@ -13,7 +13,7 @@ private struct SavedRelay: Codable {
     private static var query: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "Canddle") + ".relay",
+            kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "VPComm") + ".relay",
             kSecAttrAccount as String: "saved-relay",
             kSecAttrSynchronizable as String: false
         ]
@@ -66,6 +66,8 @@ final class CallStore: ObservableObject {
     @Published private(set) var settingsError: String?
     @Published private(set) var nameError: String?
     @Published var deviceNameDraft = ""
+    @Published private(set) var microphonePermission = AVAudioSession.sharedInstance().recordPermission
+    @Published private(set) var requestingMicrophonePermission = false
     @Published var callFailure: String?
     @Published var invitation = ""
     @Published var importCertificate = false
@@ -114,6 +116,20 @@ final class CallStore: ObservableObject {
         } catch {
             settingsError = "Could not read the saved relay. Unlock your iPhone and reopen the app."
         }
+    }
+
+    func refreshMicrophonePermission() {
+        microphonePermission = AVAudioSession.sharedInstance().recordPermission
+    }
+
+    func requestMicrophonePermission() async {
+        guard !busy, !requestingMicrophonePermission else { return }
+        requestingMicrophonePermission = true
+        defer {
+            requestingMicrophonePermission = false
+            refreshMicrophonePermission()
+        }
+        _ = await AudioIO.permission()
     }
 
     @discardableResult

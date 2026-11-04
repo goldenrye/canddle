@@ -1,4 +1,4 @@
-# Canddle
+# VPComm
 
 A self-hosted audio calling prototype: two-person desktop/manual calls and
 up to six-person iPhone group calls. Python desktop and native iPhone clients send
@@ -183,7 +183,7 @@ real local WebSocket relay. Synthetic tests do not record or play real sound.
 ## iPhone Client
 
 A native iOS 16+ client is available in [`iphone/`](iphone/README.md). Open
-`iphone/Canddle.xcodeproj` in Xcode, select your development signing team, and run
+`iphone/VPComm.xcodeproj` in Xcode, select your development signing team, and run
 it on your iPhone. It supports foreground calls with the desktop client or
 another iPhone, manual invitation sharing, verification codes, mute, hang-up, and
 private-CA certificates.

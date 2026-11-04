@@ -153,15 +153,47 @@ struct RelaySettingsView: View {
     @ObservedObject var call: CallStore
     @ObservedObject var lobby: GroupStore
     @FocusState private var editing: Bool
+    @Environment(\.scenePhase) private var phase
+    @Environment(\.openURL) private var openURL
+
+    @ViewBuilder
+    private var microphoneSettings: some View {
+        switch call.microphonePermission {
+        case .granted:
+            Label("Microphone access allowed", systemImage: "checkmark.circle")
+                .accessibilityIdentifier("microphoneAllowed")
+        case .denied:
+            Text("Microphone access denied. Enable Microphone in iPhone Settings to speak on calls.")
+                .accessibilityIdentifier("microphoneDenied")
+            Button("Open iPhone Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            }
+            .accessibilityIdentifier("microphoneSettings")
+            .disabled(call.busy)
+        case .undetermined:
+            Text("Microphone access not requested")
+                .accessibilityIdentifier("microphoneNotRequested")
+            Button("Allow microphone access") {
+                Task { await call.requestMicrophonePermission() }
+            }
+            .accessibilityIdentifier("requestMicrophone")
+            .disabled(call.busy || call.requestingMicrophonePermission)
+        @unknown default:
+            Text("Microphone permission is unavailable. Check iPhone Settings.")
+        }
+        if call.requestingMicrophonePermission {
+            ProgressView("Waiting for microphone permission")
+        }
+        Text("This grants access only; it does not start recording. Background ringing requires Apple push setup separately.")
+            .font(.caption).foregroundStyle(.secondary)
+    }
 
     var body: some View {
         Group {
             Form {
                 Section("Your device") {
                     Text(lobby.pushStatus).font(.caption).foregroundStyle(.secondary)
-                    Button("Allow microphone for lock-screen calls") {
-                        Task { _ = await AudioIO.permission() }
-                    }.disabled(call.busy)
+                    microphoneSettings
                     TextField("Device name", text: $call.deviceNameDraft)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("lobbyName").focused($editing)
@@ -291,6 +323,10 @@ struct RelaySettingsView: View {
         .onAppear {
             call.settingsVisible = true
             call.deviceNameDraft = lobby.name
+            call.refreshMicrophonePermission()
+        }
+        .onChange(of: phase) { phase in
+            if phase == .active { call.refreshMicrophonePermission() }
         }
         .onDisappear {
             call.settingsVisible = false

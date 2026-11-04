@@ -17,8 +17,11 @@ Accepted CallKit audio sessions can continue with the screen locked.
    Release defaults to production; override for development-signed Release builds.
 4. Install and open the app, configure the upgraded relay, and wait for Settings
    to show **Background ringing registered with this relay.**
-5. In Settings, tap **Allow microphone for lock-screen calls**. Make a foreground
-   call and complete the existing first-time device verification.
+5. In Settings, tap **Allow microphone access** and allow the iOS prompt. The page
+   then shows **Microphone access allowed**. If access was previously denied, use
+   **Open iPhone Settings** and enable Microphone; the status refreshes on return.
+   This permission does not itself enable push notifications or start recording.
+   Make a foreground call and complete the existing first-time device verification.
 
 Simulator builds do not establish that remote VoIP delivery or physical audio
 works. Personal-team provisioning does not provide the required push capability.

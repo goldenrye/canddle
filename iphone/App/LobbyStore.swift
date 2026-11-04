@@ -10,7 +10,7 @@ struct LobbyIdentity: Codable {
     private static var query: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "Canddle") + ".lobby",
+            kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "VPComm") + ".lobby",
             kSecAttrAccount as String: "device-identity",
             kSecAttrSynchronizable as String: false
         ]
