@@ -156,6 +156,12 @@ struct RelaySettingsView: View {
     @Environment(\.scenePhase) private var phase
     @Environment(\.openURL) private var openURL
 
+    private var appVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        return "\(version) (\(build))"
+    }
+
     @ViewBuilder
     private var microphoneSettings: some View {
         switch call.microphonePermission {
@@ -194,18 +200,28 @@ struct RelaySettingsView: View {
                 Section("Your device") {
                     Text(lobby.pushStatus).font(.caption).foregroundStyle(.secondary)
                     microphoneSettings
-                    TextField("Device name", text: $call.deviceNameDraft)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityIdentifier("lobbyName").focused($editing)
-                        .disabled(call.busy || lobby.waiting)
-                    Button("Save name") {
-                        if call.saveDeviceName(call.deviceNameDraft) {
-                            call.deviceNameDraft = lobby.name
-                            editing = false
+                    HStack {
+                        TextField("Device name", text: $call.deviceNameDraft)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("lobbyName").focused($editing)
+                            .disabled(call.busy || lobby.waiting)
+                        Button {
+                            if call.saveDeviceName(call.deviceNameDraft) {
+                                call.deviceNameDraft = lobby.name
+                                editing = false
+                            }
+                        } label: {
+                            Image(systemName: "checkmark.circle")
+                                .font(.body)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Save name")
+                        .accessibilityIdentifier("saveDeviceName")
+                        .help("Save name")
+                        .disabled(call.busy || lobby.waiting || call.deviceNameDraft == lobby.name)
                     }
-                    .accessibilityIdentifier("saveDeviceName")
-                    .disabled(call.busy || lobby.waiting || call.deviceNameDraft == lobby.name)
                     if let error = call.nameError {
                         Text(error).font(.caption).foregroundStyle(.red)
                     }
@@ -283,6 +299,14 @@ struct RelaySettingsView: View {
                         ProgressView("Pairing securely")
                         Button("Cancel pairing", role: .cancel) { call.hangUp() }
                     }
+                }
+                Section("About") {
+                    LabeledContent("App", value: "Canddle")
+                    LabeledContent("Version", value: appVersion)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Version")
+                        .accessibilityValue(appVersion)
+                        .accessibilityIdentifier("appVersion")
                 }
             }
             .navigationTitle("Settings")

@@ -56,6 +56,28 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(button(app, "importCA").exists)
     }
 
+    @MainActor func testSettingsShowsVersionAndAccessibleSaveIcon() {
+        let app = XCUIApplication()
+        app.launch()
+        settings(app)
+        let save = button(app, "saveDeviceName")
+        XCTAssertEqual(save.label, "Save name")
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertGreaterThanOrEqual(save.frame.height, 44)
+        XCTAssertEqual(save.frame.midY, app.textFields["lobbyName"].frame.midY, accuracy: 2)
+        XCTAssertFalse(app.staticTexts["Save name"].exists)
+        let version = app.descendants(matching: .any)["appVersion"].firstMatch
+        for _ in 0..<10 {
+            if version.exists && version.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(version.isHittable)
+        XCTAssertEqual(version.label, "Version")
+        let value = version.value as? String ?? ""
+        XCTAssertNotNil(value.range(of: #"^\d+(\.\d+)* \(\d+(\.\d+)*\)$"#,
+                                    options: .regularExpression))
+    }
+
     @MainActor private func requestMicrophone(_ app: XCUIApplication, allow: Bool) {
         app.resetAuthorizationStatus(for: .microphone)
         app.launch()
