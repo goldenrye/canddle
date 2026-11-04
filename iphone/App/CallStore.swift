@@ -66,6 +66,12 @@ final class CallStore: ObservableObject {
     @Published private(set) var settingsError: String?
     @Published private(set) var nameError: String?
     @Published var deviceNameDraft = ""
+    @Published var autoAcceptVerifiedDevices = false {
+        didSet {
+            lobby.autoAcceptVerifiedDevices = autoAcceptVerifiedDevices
+            UserDefaults.standard.set(autoAcceptVerifiedDevices, forKey: "autoAcceptVerifiedDevices")
+        }
+    }
     @Published private(set) var microphonePermission = AVAudioSession.sharedInstance().recordPermission
     @Published private(set) var requestingMicrophonePermission = false
     @Published var callFailure: String?
@@ -94,6 +100,8 @@ final class CallStore: ObservableObject {
     var settingsVisible = false
 
     init() {
+        autoAcceptVerifiedDevices = UserDefaults.standard.bool(forKey: "autoAcceptVerifiedDevices")
+        lobby.autoAcceptVerifiedDevices = autoAcceptVerifiedDevices
         if let name = UserDefaults.standard.string(forKey: "deviceName") {
             lobby.rename(name)
         }

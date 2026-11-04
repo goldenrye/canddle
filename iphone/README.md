@@ -69,7 +69,7 @@ If the administrator rotates the shared relay token, pair again.
    (subject to device sound settings). A phone connecting later also sees the
    ongoing call. Tap **Join call** to request admission.
 4. For a previously verified caller, Join call is the only requester action.
-   The caller chooses **Accept**, **Reject**, or **Ignore** for each request.
+   By default the caller chooses **Accept**, **Reject**, or **Ignore** for each request.
    Ignore hides the request locally; it expires without granting access.
 5. On a first call with an **unverified** device, compare the entire displayed
    security code in person or over an independent trusted channel. The requester
@@ -84,6 +84,21 @@ If the administrator rotates the shared relay token, pair again.
    **Remove participant**, or use **End for everyone** in the bottom bar. The caller must remain connected. If the caller
    disconnects, the whole call ends. Accepted CallKit calls continue while locked. Another
    participant leaving does not end the remaining participants' call.
+
+**Settings > Call admission > Auto-accept verified family devices** is off by
+default and saved on this iPhone. When enabled, calls you initiate automatically
+admit requests from device keys previously verified on this relay, after the
+requester's cryptographic confirmation. It applies to all your verified devices
+on that relay, not a separate family allowlist. Enable it only when that is your
+intended access policy. New/changed keys and verification on another relay do not
+qualify. The receiver must still explicitly Join or Answer; incoming calls are
+never automatically answered.
+
+Automatic admissions use the same signed roster, one at a time, with the same
+six-person limit. Participants see a join notification. Rejected, ignored, or
+removed devices require manual acceptance to enter again during that call.
+Disabling the setting restores manual approval for future admissions; it does
+not remove existing participants. Settings changes are unavailable during a call.
 
 The group is the set of people provisioned with this relay's access token,
 not a separate contacts database or named-group feature. Use separate relay

@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 final class GroupStore: ObservableObject {
     @Published var name = "My iPhone"
+    @Published var autoAcceptVerifiedDevices = false
     @Published private(set) var active = false
     @Published private(set) var online = false
     @Published private(set) var sending = false
@@ -53,6 +54,7 @@ final class GroupStore: ObservableObject {
     private var ignored = Set<String>()
     private var departed = Set<String>()
     private var autoStart = false
+    private var blockedAutomaticAdmissions = Set<String>()
 
     init(loadIdentity: @escaping () throws -> LobbyIdentity = LobbyIdentity.load,
          saveIdentity: @escaping (LobbyIdentity) throws -> Void = { try $0.save() }) {
@@ -207,6 +209,7 @@ final class GroupStore: ObservableObject {
         deadline?.cancel(); deadline = nil
         ownOffer = nil; joining = nil; confirmed = false
         members = []; candidates = []; ignored = []; departed = []
+        blockedAutomaticAdmissions = []
         ephemeral = nil; roster = nil; proposed = nil; cipher = nil
         mixer.reset([])
         inCall = false
@@ -233,6 +236,7 @@ final class GroupStore: ObservableObject {
                 guard generation == id else { return }
                 sending = false; action = nil
                 processDepartures()
+                processAutomaticAdmissions()
             } catch {
                 if generation == id { disconnect("Could not send group action. Reconnecting on Calls.") }
             }
@@ -325,14 +329,28 @@ final class GroupStore: ObservableObject {
         } catch { status = "Could not save verification or authorize membership. Nothing sent." }
     }
 
+    private func processAutomaticAdmissions() {
+        guard autoAcceptVerifiedDevices, online, ownOffer != nil, !sending,
+              proposed == nil, departed.isEmpty, members.count < 6,
+              let candidate = candidates.first(where: {
+                  $0.confirmed && !ignored.contains($0.id)
+                      && !blockedAutomaticAdmissions.contains($0.exchange.request.identity)
+                      && trustedName($0.exchange.request.identity) != nil
+              }) else { return }
+        // Reuse the signed-roster path; presence and display names never authorize admission.
+        approve(candidate)
+    }
+
     func reject(_ candidate: LobbyCandidate) {
         guard let ownOffer, !sending, proposed == nil else { return }
+        blockedAutomaticAdmissions.insert(candidate.exchange.request.identity)
         send([["type": "reject", "call": ownOffer.id, "request": candidate.id]])
         candidates.removeAll { $0.id == candidate.id }
     }
 
     func ignore(_ candidate: LobbyCandidate) {
         ignored.insert(candidate.id)
+        blockedAutomaticAdmissions.insert(candidate.exchange.request.identity)
         status = "Request ignored. It will expire without joining."
     }
 
@@ -340,6 +358,7 @@ final class GroupStore: ObservableObject {
         guard member.id != ownIdentity, let offer = ownOffer, let signing,
               !sending, proposed == nil else { return }
         do {
+            blockedAutomaticAdmissions.insert(member.id)
             let next = try GroupRoster.create(offer: offer, revision: (roster?.revision ?? 0) + 1,
                 members: members.filter { $0.id != member.id && !departed.contains($0.id) }, signing: signing)
             proposed = next
@@ -463,6 +482,10 @@ final class GroupStore: ObservableObject {
                 }
             }
             cipher = try GroupCipher(roster: next, identity: ownIdentity, ephemeral: ephemeral)
+            let joinedNames = next.members.filter { nextMember in
+                nextMember.id != ownIdentity && !members.contains { $0.id == nextMember.id }
+            }.map { trustedName($0.id) ?? $0.name }
+            let announceJoin = ownOffer != nil || roster != nil
             roster = next; proposed = nil
             members = next.members
             departed = departed.intersection(Set(members.map(\.id)))
@@ -472,6 +495,9 @@ final class GroupStore: ObservableObject {
             let first = !inCall
             inCall = true
             status = "Encrypted group call. \(members.count) participants. Later peers may request to join."
+            if announceJoin && !joinedNames.isEmpty {
+                notify("\(joinedNames.joined(separator: ", ")) joined the call.")
+            }
             if first { onAudioReady?() }
             processDepartures()
         case "departed":
@@ -502,5 +528,6 @@ final class GroupStore: ObservableObject {
             }
         default: throw VoiceError.packet
         }
+        processAutomaticAdmissions()
     }
 }

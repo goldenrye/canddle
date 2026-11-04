@@ -234,7 +234,17 @@ endpoint. Legacy lobby and group discovery are separate. No extra port or
 database is required. One relay/token defines one announcement group; this is
 not a fine-grained group-membership directory or per-device authorization system.
 Any token holder may discover calls or request admission. Callers must verify
-unknown device identities and explicitly accept each participant.
+unknown device identities. Manual acceptance of each participant is the default.
+The opt-in, locally persisted **Auto-accept verified family devices** preference
+authorizes automatic admission of all device keys previously verified on the
+current relay, not a separate family allowlist. A valid signed request and verified
+confirmation proof are still required, and admission uses the same caller-signed
+roster and six-person limit. Names and presence never qualify a device.
+Rejected, ignored, and removed keys are blocked from automatic admission for the
+remainder of that call. First-time trust still requires manual acceptance.
+Join notifications are emitted after authenticated roster updates; enabling this
+policy does not automatically answer incoming calls or enable microphone capture
+on push receipt.
 
 Registration, offers, requests, first-time code comparison and confirmation
 HMAC reuse the v1 signed transcripts described above. No v1 invitation or
@@ -350,7 +360,8 @@ disconnects idle sockets. Accepted CallKit audio continues while locked.
 Reconnection never restores call membership or starts the microphone.
 Keychain credentials, public CA trust, identity and verified peers are now
 device-only, accessible after first unlock, to support push-launched call answering.
-CallKit answer does not bypass first-time identity verification or caller approval.
+CallKit answer does not bypass first-time identity verification or caller admission
+policy (manual by default, optionally automatic for already verified devices).
 The relay learns identities, roster
 membership, names, call timing and traffic volume. A malicious relay can deny
 service or suppress updates; authentication does not guarantee delivery, a

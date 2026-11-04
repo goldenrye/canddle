@@ -260,6 +260,18 @@ struct RelaySettingsView: View {
                     Text("Address and token are saved automatically in this iPhone's Keychain. "
                          + "They are not synced through iCloud.")
                 }.disabled(call.busy || lobby.active)
+                Section {
+                    Toggle("Auto-accept verified family devices", isOn: $call.autoAcceptVerifiedDevices)
+                        .accessibilityIdentifier("autoAcceptVerifiedDevices")
+                        .disabled(call.busy || lobby.waiting)
+                } header: {
+                    Text("Call admission")
+                } footer: {
+                    Text("Off by default. When you start a call, any device previously verified on this relay "
+                         + "can join without another Accept tap after it requests to join and confirms your identity. "
+                         + "Enable only if all your verified devices belong to people you want to admit automatically. "
+                         + "New devices still require manual verification. This does not automatically answer incoming calls.")
+                }
                 Section("Advanced") {
                     DisclosureGroup("Certificate trust") {
                         if let fingerprint = call.rootFingerprint {

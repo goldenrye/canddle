@@ -47,6 +47,21 @@ struct GroupChecks {
             var saved = (0..<7).map { _ in
                 LobbyIdentity(secret: Curve25519.Signing.PrivateKey().rawRepresentation, trusted: [:])
             }
+            if input.mode.hasPrefix("auto-") {
+                let ids = try saved.map {
+                    VoiceProtocol.base64(try Curve25519.Signing.PrivateKey(rawRepresentation: $0.secret)
+                        .publicKey.rawRepresentation)
+                }
+                for index in 1..<7 {
+                    let scope = input.mode == "auto-other-relay" ? "wss://other.example/relay" : settings.url.absoluteString
+                    if input.mode != "auto-unverified" || index != 1 {
+                        saved[0].trusted[scope + "|" + ids[index]] = "Renamed Phone"
+                    }
+                    if !["auto-unconfirmed", "auto-ignore", "auto-reject"].contains(input.mode) {
+                        saved[index].trusted[settings.url.absoluteString + "|" + ids[0]] = "Caller"
+                    }
+                }
+            }
             let clients = (0..<7).map { index in
                 GroupStore(loadIdentity: { saved[index] }, saveIdentity: {
                     if input.mode == "save-failure" || (input.mode == "caller-save-failure" && index == 0) {
@@ -66,6 +81,11 @@ struct GroupChecks {
             precondition(!clients[1].active)
             defer { clients.forEach { $0.disconnect() } }
             let host = clients[0]
+            if input.mode.hasPrefix("auto-") {
+                try await automaticAdmissionChecks(clients, settings: settings, mode: input.mode)
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode == "cancel" {
                 host.connect(settings)
                 host.disconnect()
@@ -218,6 +238,70 @@ struct GroupChecks {
         } catch {
             print("FAIL group \(String(describing: error))")
             exit(1)
+        }
+    }
+
+    @MainActor static func automaticAdmissionChecks(_ clients: [GroupStore],
+                                                    settings: RelaySettings, mode: String) async throws {
+        let host = clients[0], receiver = clients[1]
+        precondition(!host.autoAcceptVerifiedDevices)
+        host.autoAcceptVerifiedDevices = mode != "auto-disabled"
+        host.connect(settings, startCall: true)
+        receiver.connect(settings)
+        try await wait { receiver.offers.count == 1 && !host.sending }
+        precondition(!receiver.inCall && host.members.count == 1)
+        let offer = receiver.offers[0]
+        if mode == "auto-batch" {
+            for client in clients.dropFirst(2) { client.connect(settings) }
+            try await wait { clients.dropFirst().allSatisfy { $0.offers.count == 1 } }
+            for client in clients.dropFirst() { client.request(offer) }
+            try await wait {
+                host.members.count == 6 && host.approving == nil && !host.sending
+                    && clients.dropFirst().filter(\.inCall).count == 5 && host.candidates.count == 1
+            }
+            precondition(clients.dropFirst().filter { !$0.inCall }.allSatisfy(\.waiting))
+            try await audio(clients.filter(\.inCall))
+            return
+        }
+        receiver.request(offer)
+        if ["auto-unconfirmed", "auto-ignore", "auto-reject"].contains(mode) {
+            try await wait { host.candidates.count == 1 && !receiver.sending }
+            precondition(!host.candidates[0].confirmed && !host.inCall)
+            if mode == "auto-ignore" { host.ignore(host.candidates[0]) }
+            if mode == "auto-reject" {
+                host.reject(host.candidates[0])
+                try await wait { !receiver.waiting && !host.sending }
+                receiver.request(offer)
+                try await wait { host.candidates.count == 1 && !receiver.sending }
+            }
+            receiver.confirmCaller()
+        }
+        if ["auto-disabled", "auto-unverified", "auto-other-relay", "auto-ignore", "auto-reject"].contains(mode) {
+            try await wait { host.candidates.count == 1 && host.candidates[0].confirmed && !receiver.sending }
+            // Give pending send completions a chance to exercise the admission queue.
+            try await Task.sleep(nanoseconds: 200_000_000)
+            precondition(!host.inCall && !receiver.inCall && host.approving == nil)
+            host.approve(host.candidates[0])
+        }
+        try await wait { host.inCall && receiver.inCall && !host.sending && host.approving == nil }
+        precondition(host.notification?.contains("joined the call") == true)
+        try await audio(Array(clients.prefix(2)))
+        if mode == "auto-enabled" {
+            host.remove(host.members.first { $0.id == receiver.ownIdentity }!)
+            try await wait { !receiver.inCall && host.members.count == 1 && !host.sending && host.approving == nil }
+            receiver.request(offer)
+            try await wait { host.candidates.count == 1 && host.candidates[0].confirmed && !receiver.sending }
+            try await Task.sleep(nanoseconds: 200_000_000)
+            precondition(!receiver.inCall && host.approving == nil)
+            host.approve(host.candidates[0])
+            try await wait { receiver.inCall && !host.sending && host.approving == nil }
+            host.autoAcceptVerifiedDevices = false
+            clients[2].connect(settings)
+            try await wait { clients[2].offers.count == 1 }
+            clients[2].request(offer)
+            try await wait { host.candidates.count == 1 && host.candidates[0].confirmed && !clients[2].sending }
+            try await Task.sleep(nanoseconds: 200_000_000)
+            precondition(!clients[2].inCall && host.members.count == 2)
         }
     }
 

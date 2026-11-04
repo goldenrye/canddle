@@ -27,6 +27,14 @@ TOKEN = "group-test-" + "a" * 40
         "caller-save-failure",
         "tls",
         "legacy-presence",
+        "auto-enabled",
+        "auto-disabled",
+        "auto-unverified",
+        "auto-other-relay",
+        "auto-unconfirmed",
+        "auto-batch",
+        "auto-ignore",
+        "auto-reject",
     ],
 )
 async def test_native_group(mode, tmp_path):

@@ -71,8 +71,11 @@ Old clients continue to work with the upgraded relay.
   validates its signed offer, relay scope, recipient, expiry and duplicate status.
   Invalid/stale calls are ended. No cancellation or generic notification pushes
   are sent as VoIP pushes.
-- Answer requests admission for a previously verified caller. The caller still
-  explicitly accepts the request. No microphone starts on receipt of a push.
+- Answer requests admission for a previously verified caller. The caller
+  accepts manually by default. The optional **Auto-accept verified family devices**
+  setting permits automatic admission only for devices already verified by the
+  caller on this relay. It does not automatically answer incoming calls.
+  No microphone starts on receipt of a push.
 - Unknown callers or missing microphone permission require opening the app;
   answering on the lock screen does not bypass either requirement.
 - Ringing times out after 30 seconds. Admission after answering is bounded to
