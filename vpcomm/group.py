@@ -18,6 +18,39 @@ class GroupLobby(Lobby):
         self.revisions = {}
         self.paused = set()
         self.request_timers = {}
+        self.presence_subscribers = {}
+        self.presence_update = None
+
+    def challenge(self, nonce):
+        return {**super().challenge(nonce), "presence": "1"}
+
+    def presence_changed(self):
+        # Coalesce synchronous membership changes and never stream presence to old clients.
+        if self.presence_update is None:
+            self.presence_update = asyncio.get_running_loop().call_soon(self.publish_presence)
+
+    def publish_presence(self):
+        self.presence_update = None
+        peers = sorted(self.peers.values(), key=lambda peer: peer.identity)
+        entries = []
+        for peer in peers[:32]:
+            state = "online"
+            if peer.joined:
+                state = "in-call" if self.revisions.get(peer.joined, 0) else "calling"
+            elif peer.request:
+                state = "joining"
+            entries.append([peer.identity, peer.name, state])
+        payload = json.dumps(entries, separators=(",", ":"))
+        message = {
+            "type": "presence", "members": payload,
+            "truncated": "yes" if len(peers) > 32 else "no",
+        }
+        for peer, previous in list(self.presence_subscribers.items()):
+            if self.peers.get(peer.identity) is not peer:
+                self.presence_subscribers.pop(peer, None)
+            elif previous != message:
+                peer.emit(message)
+                self.presence_subscribers[peer] = message
 
     @staticmethod
     def parse(raw):
@@ -38,12 +71,14 @@ class GroupLobby(Lobby):
         self.revisions.pop(call, None)
         self.paused.discard(call)
         super().close_offer(call, reason)
+        self.presence_changed()
 
     def remove_request(self, offer, request, reason):
         timer = self.request_timers.pop((offer.message["call"], request), None)
         if timer:
             timer.cancel()
         super().remove_request(offer, request, reason)
+        self.presence_changed()
 
     def expire_request(self, call, request):
         offer = self.offers.get(call)
@@ -62,6 +97,10 @@ class GroupLobby(Lobby):
 
     def dispatch(self, peer, message):
         kind = message.get("type")
+        if kind == "presence-subscribe" and set(message) == {"type"}:
+            self.presence_subscribers.setdefault(peer, None)
+            self.presence_changed()
+            return
         if kind == "push-capabilities" and set(message) == {"type"}:
             peer.emit({"type": "push-capabilities", "enabled": "yes" if self.push else "no"})
             return

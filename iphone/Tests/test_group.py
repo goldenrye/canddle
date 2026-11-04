@@ -26,10 +26,13 @@ TOKEN = "group-test-" + "a" * 40
         "save-failure",
         "caller-save-failure",
         "tls",
+        "legacy-presence",
     ],
 )
 async def test_native_group(mode, tmp_path):
     relay = Relay(TOKEN)
+    if mode == "legacy-presence":
+        relay.group.challenge = lambda nonce: {"type": "challenge", "challenge": nonce}
     relay.group.lifetime = 1.5 if mode == "ignore" else 120
     context, root = tls_fixture(tmp_path) if mode == "tls" else (None, None)
     if context:

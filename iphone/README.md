@@ -92,6 +92,22 @@ announcements, but only accepted participants receive authenticated media links.
 Participants trust the verified caller to authorize the roster; they do not
 individually verify every other member. Always check the participant list.
 
+The **Group members** list on Calls shows this device, devices seen on the relay
+during this app session, and saved verified peers for the same relay. Statuses are
+**Online**, **Calling**, **Joining**, **In call**, **Not connected**, or **Unknown**.
+These are relay-reported connection/admission states, not microphone, mute, or
+guaranteed call-delivery status. A locked/backgrounded phone marked Not connected
+may still receive an Apple push. When your phone disconnects, remote statuses become
+Unknown. Unverified devices remain labeled as such; presence does not verify keys.
+
+Rebuild/redeploy the relay to enable live presence (`docker compose up -d --build`,
+retaining the push override when used). The app negotiates support automatically;
+older relays still support calls but cannot provide live member statuses. Older
+clients do not receive presence frames. Snapshots list up to 32 connected group
+devices, with a warning when truncated, and discovered names are retained only
+in a bounded in-memory cache. This is not a permanent directory of everyone who
+has ever paired, and desktop/manual-call clients are not included.
+
 Unanswered announcements and individual join requests expire after two minutes.
 The first acceptance keeps the announcement open for the call. Connections
 have a one-hour maximum lifetime from going online, so a caller already online

@@ -453,6 +453,16 @@ constant-rate traffic padding.
 
 ## Resource and Logging Policy
 
+Group clients may opt into relay presence after capability discovery in the
+registration challenge. Authenticated group devices can then see other connected
+group devices' public keys, registered names, and calling/joining/admitted states.
+Snapshots are bounded to 32 entries, coalesced, and sent only when changed.
+Presence is relay-asserted metadata, not end-to-end proof of identity or audio
+activity, and never grants admission or bypasses peer verification. Discovered
+names are cached in memory (up to 128); saved verified names remain relay-scoped.
+Disconnected devices may still be reachable by APNs. No push tokens, access
+tokens, or private keys are included in presence messages.
+
 The manual relay path has a connection admission limit, per-socket 60-frame/s replenishing
 budget with a 100-frame burst, 1024-byte message limit, bounded WebSocket queues,
 bounded sends, wait/call timeouts, and ping-based liveness. Audio device queues

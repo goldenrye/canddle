@@ -98,6 +98,12 @@ class Lobby:
             if peer not in excluding:
                 peer.emit(message)
 
+    def challenge(self, nonce):
+        return {"type": "challenge", "challenge": nonce}
+
+    def presence_changed(self):
+        pass
+
     def close_offer(self, call, reason="closed"):
         offer = self.offers.pop(call, None)
         if offer is None:
@@ -127,7 +133,7 @@ class Lobby:
         try:
             challenge = encode(secrets.token_bytes(32))
             async with asyncio.timeout(10):
-                await socket.send(json.dumps({"type": "challenge", "challenge": challenge}))
+                await socket.send(json.dumps(self.challenge(challenge)))
                 hello = self.parse(await socket.recv())
             if set(hello) != {"type", "identity", "name", "signature"}:
                 raise ValueError("Invalid registration")
@@ -148,6 +154,7 @@ class Lobby:
             peer.emit({"type": "online"})
             for offer in self.offers.values():
                 peer.emit(offer.message)
+            self.presence_changed()
             async with asyncio.timeout(self.session_lifetime):
                 while True:
                     async with asyncio.timeout(45):
@@ -163,6 +170,7 @@ class Lobby:
                         raise ValueError("Rate exceeded")
                     peer.allowance -= 1
                     self.dispatch(peer, message)
+                    self.presence_changed()
         except (ValueError, TypeError, KeyError, TimeoutError):
             await socket.close(1008, "Invalid lobby request or time limit")
         except ConnectionClosed:
@@ -178,6 +186,7 @@ class Lobby:
                     offer = self.offers.get(call)
                     if offer and request in offer.requests:
                         self.remove_request(offer, request, "withdrawn")
+                self.presence_changed()
             if writer:
                 writer.cancel()
                 with contextlib.suppress(asyncio.CancelledError, ConnectionClosed, TimeoutError):

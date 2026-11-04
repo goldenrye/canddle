@@ -73,15 +73,30 @@ struct GroupChecks {
                 precondition(!host.active && !host.online && !host.inCall)
             }
             clients[1].connect(settings)
-            try await wait { clients[1].online }
+            if input.mode == "legacy-presence" {
+                try await wait { clients[1].online }
+                host.connect(settings, startCall: true)
+                try await wait { clients[1].offers.count == 1 && !host.sending }
+                precondition(!clients[1].presenceSupported && !clients[1].presenceReady)
+                precondition(clients[1].groupDirectory.allSatisfy { $0.state == .unknown })
+                clients[1].request(clients[1].offers[0])
+                try await wait { host.candidates.count == 1 && !clients[1].sending }
+                precondition(host.online && clients[1].online)
+                print("PASS group \(input.mode)")
+                return
+            }
+            try await wait { clients[1].online && clients[1].presenceReady }
+            precondition(clients[1].groupDirectory.first?.state == .online)
             precondition(!clients[1].inCall && clients[1].offers.isEmpty)
             host.connect(settings, startCall: true)
             try await wait { host.ownOffer != nil && clients[1].offers.count == 1 && !host.sending }
+            try await wait { clients[1].presence[host.ownIdentity]?.state == .calling }
             precondition(clients[1].notification != nil)
             precondition(!host.rename("Cannot change announced identity"))
             let offer = clients[1].offers[0]
             clients[1].request(offer)
             try await wait { host.candidates.count == 1 && !clients[1].sending }
+            try await wait { host.presence[clients[1].ownIdentity]?.state == .joining }
             precondition(host.notification != nil)
             precondition(host.candidates[0].exchange.request.name == "Renamed Phone")
             precondition(!clients[1].rename("Cannot change pending identity"))
@@ -102,6 +117,10 @@ struct GroupChecks {
                 return
             }
             try await wait { host.members.count == 2 && clients[1].inCall && !host.sending }
+            try await wait {
+                host.presence[clients[1].ownIdentity]?.state == .inCall
+                    && clients[1].presence[host.ownIdentity]?.state == .inCall
+            }
             precondition(!clients[1].rename("Cannot change active identity"))
             try await audio(Array(clients.prefix(2)))
 
@@ -188,8 +207,13 @@ struct GroupChecks {
                     try await audio(Array(clients.prefix(3)))
                 }
             }
+            let hostID = host.ownIdentity
             host.disconnect()
+            precondition(host.groupDirectory.allSatisfy { $0.state == .unknown })
             try await wait { clients.dropFirst().allSatisfy { !$0.inCall } }
+            try await wait {
+                clients[1].groupDirectory.contains { $0.id == hostID && $0.state == .disconnected }
+            }
             print("PASS group \(input.mode)")
         } catch {
             print("FAIL group \(String(describing: error))")
@@ -202,6 +226,20 @@ struct GroupChecks {
         let hostKey = Curve25519.KeyAgreement.PrivateKey(), peerKey = Curve25519.KeyAgreement.PrivateKey()
         let offer = try LobbyOffer.create(identity: host, name: "Caller", ephemeral: hostKey)
         let request = try LobbyRequest.create(offer: offer, identity: peer, name: "Peer", ephemeral: peerKey)
+        let snapshot = ["type": "presence", "members": "[[\"\(offer.identity)\",\"Caller\",\"online\"]]",
+                        "truncated": "no"]
+        let parsedPresence = try GroupPresenceSnapshot(snapshot)
+        precondition(parsedPresence.members.count == 1)
+        for entries in [
+            "[[\"bad-key\",\"Name\",\"online\"]]",
+            "[[\"\(offer.identity)\",\"Name\",\"muted\"]]",
+            "[[\"\(offer.identity)\",\"Name\",\"unknown\"]]",
+            "[[\"\(offer.identity)\",\"Name\"]]",
+            "[[\"\(offer.identity)\",\"\",\"online\"]]",
+            "[[\"\(offer.identity)\",\"A\",\"online\"],[\"\(offer.identity)\",\"B\",\"online\"]]"
+        ] {
+            try rejects { _ = try GroupPresenceSnapshot(snapshot.merging(["members": entries]) { _, b in b }) }
+        }
         let members = [GroupMember(message: offer.message), GroupMember(message: request.message)]
         let roster = try GroupRoster.create(offer: offer, revision: 1, members: members, signing: host)
         var a = try GroupCipher(roster: roster, identity: offer.identity, ephemeral: hostKey)

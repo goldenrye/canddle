@@ -91,11 +91,68 @@ struct LobbyView: View {
                                 .disabled(lobby.sending || lobby.approving != nil)
                         }
                     } label: {
-                        Label(member.id == lobby.ownIdentity ? "\(member.name) (you)" : member.name,
-                              systemImage: member.id == lobby.ownIdentity ? "person.fill" : "person")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(member.id == lobby.ownIdentity ? "\(member.name) (you)" : member.name,
+                                  systemImage: member.id == lobby.ownIdentity ? "person.fill" : "person")
+                            Text(lobby.inCall ? "In call" : "Waiting for participants")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
+        }
+        Section {
+            if lobby.groupDirectory.isEmpty {
+                Text("Members appear when devices connect to this relay.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(lobby.groupDirectory) { member in
+                DisclosureGroup {
+                    Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
+                        .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    Text(member.id == lobby.localIdentity ? "This device"
+                         : (lobby.trustedName(member.id) != nil ? "Previously verified device key"
+                            : "Unverified device. Verify its security code before joining a call."))
+                        .font(.caption).foregroundStyle(.secondary)
+                } label: {
+                    HStack {
+                        Text(member.id == lobby.localIdentity ? "\(member.name) (you)" : member.name)
+                        Spacer()
+                        Label(member.state.label, systemImage: presenceIcon(member.state))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+                .accessibilityIdentifier("groupMember-\(member.id)")
+            }
+        } header: {
+            Text("Group members (\(lobby.groupDirectory.count))")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                if !lobby.online {
+                    Text("Connect to refresh member statuses.")
+                } else if !lobby.presenceSupported {
+                    Text("Upgrade the relay to see live member statuses.")
+                } else if !lobby.presenceReady {
+                    Text("Loading member statuses...")
+                } else if lobby.presenceTruncated {
+                    Text("Only the first 32 connected devices are shown. Other statuses are unknown.")
+                }
+                Text("Relay-reported connection status, not microphone or delivery status. "
+                     + "A device marked Not connected may still receive calls through Apple push. "
+                     + "Includes devices seen this session and saved verified peers.")
+            }
+        }
+    }
+
+    private func presenceIcon(_ state: GroupPresenceState) -> String {
+        switch state {
+        case .online: return "circle.fill"
+        case .calling: return "phone.arrow.up.right"
+        case .joining: return "person.badge.clock"
+        case .inCall: return "phone.fill"
+        case .disconnected: return "circle"
+        case .unknown: return "questionmark.circle"
         }
     }
 

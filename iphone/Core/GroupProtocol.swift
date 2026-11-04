@@ -1,6 +1,53 @@
 import CryptoKit
 import Foundation
 
+enum GroupPresenceState: String {
+    case online, calling, joining
+    case inCall = "in-call"
+    case disconnected, unknown
+
+    var label: String {
+        switch self {
+        case .online: return "Online"
+        case .calling: return "Calling"
+        case .joining: return "Joining"
+        case .inCall: return "In call"
+        case .disconnected: return "Not connected"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
+struct GroupPresence: Identifiable {
+    let id: String
+    let name: String
+    let state: GroupPresenceState
+}
+
+struct GroupPresenceSnapshot {
+    let members: [GroupPresence]
+    let truncated: Bool
+
+    init(_ message: [String: String]) throws {
+        guard Set(message.keys) == ["type", "members", "truncated"],
+              message["type"] == "presence",
+              let data = message["members"]?.data(using: .utf8), data.count <= 8000,
+              ["yes", "no"].contains(message["truncated"]) else { throw VoiceError.packet }
+        let entries = try JSONDecoder().decode([[String]].self, from: data)
+        guard entries.count <= 32 else { throw VoiceError.packet }
+        var ids = Set<String>()
+        members = try entries.map { entry in
+            guard entry.count == 3, LobbyProtocol.nameValid(entry[1]),
+                  let state = GroupPresenceState(rawValue: entry[2]),
+                  state != .unknown, state != .disconnected,
+                  ids.insert(entry[0]).inserted else { throw VoiceError.packet }
+            _ = try VoiceProtocol.decode(entry[0], size: 32)
+            return GroupPresence(id: entry[0], name: entry[1], state: state)
+        }
+        truncated = message["truncated"] == "yes"
+    }
+}
+
 struct GroupMember: Identifiable {
     let message: [String: String]
     var id: String { message["identity"]! }

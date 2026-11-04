@@ -19,6 +19,12 @@ final class GroupStore: ObservableObject {
     @Published private(set) var trusted: [String: String] = [:]
     @Published private(set) var notification: String?
     @Published private(set) var notificationID = UUID()
+    @Published private(set) var presenceReady = false
+    @Published private(set) var presenceSupported = false
+    @Published private(set) var presenceTruncated = false
+    @Published private(set) var presence: [String: GroupPresence] = [:]
+    @Published private(set) var knownNames: [String: String] = [:]
+    private(set) var localIdentity = ""
     var onAudioReady: (() -> Void)?
     var onAudioEnded: ((String) -> Void)?
     var onCallClosed: ((String) -> Void)?
@@ -61,6 +67,26 @@ final class GroupStore: ObservableObject {
     var visibleCandidates: [LobbyCandidate] { candidates.filter { !ignored.contains($0.id) } }
     func trustedName(_ key: String) -> String? { trusted[scope + "|" + key] }
 
+    var groupDirectory: [GroupPresence] {
+        var names = knownNames
+        for member in presence.values { names[member.id] = member.name }
+        let prefix = scope + "|"
+        for (key, value) in trusted where key.hasPrefix(prefix) {
+            names[String(key.dropFirst(prefix.count))] = value
+        }
+        if !localIdentity.isEmpty { names[localIdentity] = name }
+        return names.map { key, value in
+            let state = presence[key]?.state
+                ?? (online && presenceReady && !presenceTruncated ? .disconnected : .unknown)
+            return GroupPresence(id: key, name: value, state: state)
+        }.sorted {
+            if $0.id == localIdentity { return $1.id != localIdentity }
+            if $1.id == localIdentity { return false }
+            if $0.name != $1.name { return $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            return $0.id < $1.id
+        }
+    }
+
     @discardableResult
     func rename(_ value: String) -> Bool {
         guard !waiting, !inCall, LobbyProtocol.nameValid(value),
@@ -81,6 +107,11 @@ final class GroupStore: ObservableObject {
             let saved = try loadIdentity()
             let key = try Curve25519.Signing.PrivateKey(rawRepresentation: saved.secret)
             signing = key
+            if scope != settings.url.absoluteString {
+                knownNames = [:]
+                presence = [:]
+            }
+            localIdentity = VoiceProtocol.base64(key.publicKey.rawRepresentation)
             identity = saved
             trusted = saved.trusted
             scope = settings.url.absoluteString
@@ -97,6 +128,10 @@ final class GroupStore: ObservableObject {
                     try await relay.openLobby(identity: key, name: sessionName, group: true)
                     guard generation == id else { return }
                     online = true
+                    presenceSupported = relay.supportsPresence
+                    if presenceSupported {
+                        try await relay.groupSend(["type": "presence-subscribe"])
+                    }
                     status = "Online. Start a call or join an announced call."
                     if pushToken != nil {
                         try await relay.groupSend(["type": "push-capabilities"])
@@ -145,6 +180,7 @@ final class GroupStore: ObservableObject {
         clearCall(message)
         signing = nil; identity = nil
         offers = []; active = false; online = false; sending = false
+        presence = [:]; presenceReady = false; presenceSupported = false; presenceTruncated = false
         autoStart = false
         status = message
         pushAvailable = false
@@ -359,6 +395,18 @@ final class GroupStore: ObservableObject {
 
     private func receive(_ message: [String: String]) throws {
         switch message["type"] {
+        case "presence":
+            guard presenceSupported else { throw VoiceError.packet }
+            let snapshot = try GroupPresenceSnapshot(message)
+            presence = Dictionary(uniqueKeysWithValues: snapshot.members.map { ($0.id, $0) })
+            // Remember a bounded set for this relay during this app session only.
+            for member in snapshot.members {
+                if knownNames[member.id] != nil || knownNames.count < 128 {
+                    knownNames[member.id] = member.name
+                }
+            }
+            presenceReady = true
+            presenceTruncated = snapshot.truncated
         case "push-capabilities":
             pushAvailable = message["enabled"] == "yes"
             if pushAvailable, let pushToken, let transport {

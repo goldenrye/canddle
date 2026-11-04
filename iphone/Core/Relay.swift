@@ -155,6 +155,7 @@ private final class PairingResponseDelegate: CertificateDelegate, URLSessionData
 
 @MainActor
 final class Relay {
+    private(set) var supportsPresence = false
     private let session: URLSession
     private let socket: URLSessionWebSocketTask
     private var keys: CallKeys?
@@ -242,6 +243,7 @@ final class Relay {
             throw VoiceError.packet
         }
         _ = try VoiceProtocol.decode(nonce, size: 32)
+        supportsPresence = group && challenge["presence"] == "1"
         let publicKey = VoiceProtocol.base64(identity.publicKey.rawRepresentation)
         try await lobbySend([
             "type": "register", "identity": publicKey, "name": name,
