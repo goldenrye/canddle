@@ -320,12 +320,12 @@ final class CallStore: ObservableObject {
         openLobby(automatic: true)
     }
 
-    func openLobby(startCall: Bool = false, automatic: Bool = false) {
+    func openLobby(startCall: Bool = false, automatic: Bool = false, target: String? = nil) {
         guard !busy else { return }
         do {
             let settings = try RelaySettings(address: address, token: token, root: root)
             registeredRelay = SavedRelay(address: address, token: token, root: root)
-            lobby.connect(settings, startCall: startCall)
+            lobby.connect(settings, startCall: startCall, target: target)
         } catch {
             status = (error as? VoiceError)?.errorDescription ?? "Check relay settings."
             if automatic {
@@ -515,9 +515,10 @@ final class CallStore: ObservableObject {
         // Unused invitations remain in memory so switching apps to share them works.
     }
 
-    func endSystemCall() {
+    func endSystemCall(declining offer: LobbyOffer? = nil) {
         task?.cancel()
-        lobby.disconnect("Call ended.")
+        if let offer, offer.target != nil { lobby.disconnect(declining: offer) }
+        else { lobby.disconnect("Call ended.") }
         if busy { finish(generation, message: "Call ended.") }
     }
 

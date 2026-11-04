@@ -5,7 +5,7 @@ import json
 import time
 
 from .crypto import decode, encode
-from .lobby import Lobby, transcript, verify
+from .lobby import Lobby, offer_fields, transcript, verify
 
 
 class GroupLobby(Lobby):
@@ -22,7 +22,29 @@ class GroupLobby(Lobby):
         self.presence_update = None
 
     def challenge(self, nonce):
-        return {**super().challenge(nonce), "presence": "1"}
+        return {**super().challenge(nonce), "presence": "1", "direct": "1"}
+
+    def visible_offer(self, offer, peer):
+        target = offer.message.get("target")
+        return target is None or (
+            peer.direct_calls and peer.identity in {offer.owner.identity, target}
+        )
+
+    def validate_offer(self, peer, message):
+        if "target" not in message:
+            return super().validate_offer(peer, message)
+        if not peer.direct_calls or set(message) != {
+            "type", "call", "identity", "ephemeral", "name", "signature", "target"
+        }:
+            raise ValueError("Invalid individual offer")
+        decode(message["call"], 16)
+        decode(message["ephemeral"], 32)
+        decode(message["target"], 32)
+        if message["target"] == peer.identity:
+            raise ValueError("Cannot call yourself")
+        self.check_sender(peer, message)
+        verify(peer.identity, message["signature"],
+               transcript("direct-offer", *offer_fields(message)))
 
     def presence_changed(self):
         # Coalesce synchronous membership changes and never stream presence to old clients.
@@ -78,6 +100,8 @@ class GroupLobby(Lobby):
         if timer:
             timer.cancel()
         super().remove_request(offer, request, reason)
+        if offer.message.get("target"):
+            self.close_offer(offer.message["call"], reason)
         self.presence_changed()
 
     def expire_request(self, call, request):
@@ -86,6 +110,11 @@ class GroupLobby(Lobby):
             self.remove_request(offer, request, "expired")
 
     def depart(self, peer):
+        # A recipient can hang up before sending a join request.
+        if peer.direct_calls:
+            for call, pending in list(self.offers.items()):
+                if pending.message.get("target") == peer.identity:
+                    self.close_offer(call)
         if peer.joined and peer.joined != peer.offer:
             call = peer.joined
             self.members.get(call, {}).pop(peer.identity, None)
@@ -97,6 +126,28 @@ class GroupLobby(Lobby):
 
     def dispatch(self, peer, message):
         kind = message.get("type")
+        if kind == "direct-enable" and set(message) == {"type"}:
+            if not peer.direct_calls:
+                peer.direct_calls = True
+                for offer in self.offers.values():
+                    if offer.message.get("target") and self.visible_offer(offer, peer):
+                        peer.emit(offer.message)
+            return
+        if kind == "request":
+            offer = self.offers.get(message.get("call"))
+            if offer and offer.message.get("target") and (
+                not peer.direct_calls or peer.identity != offer.message["target"]
+            ):
+                raise ValueError("Not the selected recipient")
+        if kind == "direct-decline" and set(message) == {"type", "call"}:
+            offer = self.offers.get(message["call"])
+            if offer is None:
+                peer.emit({"type": "closed", "call": message["call"], "reason": "unavailable"})
+                return
+            if offer.message.get("target") != peer.identity:
+                raise ValueError("Not the selected recipient")
+            self.close_offer(message["call"], "declined")
+            return
         if kind == "presence-subscribe" and set(message) == {"type"}:
             self.presence_subscribers.setdefault(peer, None)
             self.presence_changed()
@@ -128,7 +179,7 @@ class GroupLobby(Lobby):
             if set(message) != {"type", "call"} or peer.joined != message["call"]:
                 raise ValueError("Not a member")
             call = peer.joined
-            if peer.offer == call:
+            if peer.offer == call or self.offers[call].message.get("target"):
                 self.close_offer(call)
             else:
                 self.depart(peer)
@@ -173,6 +224,13 @@ class GroupLobby(Lobby):
         entries = json.loads(message["members"])
         if not isinstance(entries, list) or not 1 <= len(entries) <= self.MAX_MEMBERS:
             raise ValueError("Invalid member count")
+        target = offer.message.get("target")
+        if target and (
+            len(entries) != 2
+            or any(not isinstance(entry, dict) for entry in entries)
+            or {entry.get("identity") for entry in entries} != {peer.identity, target}
+        ):
+            raise ValueError("Individual calls allow only the selected pair")
         members = {}
         admitted = []
         for entry in entries:

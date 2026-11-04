@@ -1,7 +1,7 @@
 # Background and Lock-Screen Calls
 
 The iPhone app now integrates PushKit and CallKit. The relay optionally sends
-VoIP pushes for new group calls. An idle app closes its WebSocket in the
+VoIP pushes for new group and individual calls. An idle app closes its WebSocket in the
 background; Apple push wakes it and presents the native incoming-call screen.
 Accepted CallKit audio sessions can continue with the screen locked.
 
@@ -65,7 +65,9 @@ Old clients continue to work with the upgraded relay.
 
 ## Call Behavior
 
-- A signed announcement rings registered devices, excluding the caller.
+- A signed group announcement rings registered devices, excluding the caller.
+  An individual call from a member's phone icon rings only that selected device.
+  Both phones and the relay must support individual calls; no group fallback occurs.
   Delivery is limited to one new ringing attempt per caller per 30 seconds.
 - A VoIP push is promptly reported to CallKit, before network work. The app then
   validates its signed offer, relay scope, recipient, expiry and duplicate status.
@@ -75,6 +77,9 @@ Old clients continue to work with the upgraded relay.
   accepts manually by default. The optional **Auto-accept verified family devices**
   setting permits automatic admission only for devices already verified by the
   caller on this relay. It does not automatically answer incoming calls.
+  For individual calls, selecting an already verified recipient authorizes its
+  admission after Answer without an additional caller Accept, regardless of that
+  group preference. Unknown devices still require manual verification.
   No microphone starts on receipt of a push.
 - Unknown callers or missing microphone permission require opening the app;
   answering on the lock screen does not bypass either requirement.
@@ -128,6 +133,10 @@ Before shipping, test two physical provisioned iPhones:
 6. Test both sandbox development and production TestFlight APNs environments.
 7. Rotate/revoke tokens, change relay settings, forget the relay, restart the server,
    and verify old registrations no longer cause usable incoming calls.
+8. With a third registered phone present, use a member's phone icon: only the
+   selected phone should ring. Check Answer without an extra Accept for verified
+   peers, lock-screen Decline before connection completes, and either party ending
+   the call. The third phone must not see the individual offer or join it.
 
 Real APNs delivery and hardware audio must be verified separately; a successful
 build or mock APNs response is not evidence of lock-screen ringing.

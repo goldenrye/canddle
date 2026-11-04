@@ -35,6 +35,11 @@ TOKEN = "group-test-" + "a" * 40
         "auto-batch",
         "auto-ignore",
         "auto-reject",
+        "direct-verified",
+        "direct-unverified",
+        "direct-decline",
+        "direct-lock-decline",
+        "direct-disconnect",
     ],
 )
 async def test_native_group(mode, tmp_path):

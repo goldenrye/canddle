@@ -4,19 +4,20 @@ struct LobbyView: View {
     @ObservedObject var lobby: GroupStore
     let callBusy: Bool
     let startCall: () -> Void
+    let callMember: (String) -> Void
 
     var body: some View {
         if !lobby.waiting && !callBusy {
             Section {
                 Button(action: startCall) {
-                    Label("Start call", systemImage: "phone.fill")
+                    Label("Start group call", systemImage: "person.2.fill")
                         .frame(maxWidth: .infinity, minHeight: 32)
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("lobbyAnnounce")
                 .disabled(lobby.sending || (lobby.active && !lobby.online))
             } footer: {
-                Text("Connects automatically. Keep canddle open to receive and join calls.")
+                Text("Invite the group, or use a member's phone icon for an individual call.")
             }
             if lobby.online {
                 Section("Available calls") {
@@ -27,9 +28,16 @@ struct LobbyView: View {
                     ForEach(lobby.offers) { offer in
                         VStack(alignment: .leading, spacing: 8) {
                             peer(offer.identity, name: offer.name)
-                            Button("Join call") { lobby.request(offer) }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(lobby.sending)
+                            Text(offer.target == nil ? "Group call" : "Individual call")
+                                .font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                Button(offer.target == nil ? "Join group call" : "Answer") { lobby.request(offer) }
+                                    .buttonStyle(.borderedProminent)
+                                if offer.target != nil {
+                                    Button("Decline", role: .destructive) { lobby.decline(offer) }
+                                        .buttonStyle(.bordered)
+                                }
+                            }.disabled(lobby.sending)
                         }
                     }
                 }
@@ -48,7 +56,7 @@ struct LobbyView: View {
                             Button(lobby.trustedName(candidate.exchange.request.identity) == nil
                                    ? "Codes match: verify and accept" : "Accept") {
                                 lobby.approve(candidate)
-                            }.disabled(!candidate.confirmed || lobby.sending || lobby.approving != nil || lobby.members.count >= 6)
+                            }.disabled(!candidate.confirmed || lobby.sending || lobby.approving != nil || lobby.members.count >= lobby.memberLimit)
                                 .buttonStyle(.borderedProminent)
                             HStack {
                                 Button("Reject", role: .destructive) { lobby.reject(candidate) }
@@ -61,8 +69,14 @@ struct LobbyView: View {
                 }
             } else if !lobby.inCall {
                 Section {
-                    Label("Waiting for join requests", systemImage: "person.badge.clock")
-                    Text("Your call is visible to everyone online on this relay.")
+                    if let target = lobby.ownOffer?.target {
+                        peer(target, name: lobby.groupDirectory.first { $0.id == target }?.name ?? "Selected device")
+                    }
+                    Label(lobby.isIndividual ? "Waiting for an answer" : "Waiting for join requests",
+                          systemImage: "person.badge.clock")
+                    Text(lobby.isIndividual
+                         ? "Only the selected device is invited. Both devices need an updated app."
+                         : "Your group call is visible to everyone online on this relay.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
@@ -81,13 +95,13 @@ struct LobbyView: View {
             }
         }
         if !lobby.members.isEmpty {
-            Section("Participants (\(lobby.members.count)/6)") {
+            Section("Participants (\(lobby.members.count)/\(lobby.memberLimit))") {
                 ForEach(lobby.members) { member in
                     DisclosureGroup {
                         Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
                             .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                         if lobby.isCaller && member.id != lobby.ownIdentity {
-                            Button("Remove participant", role: .destructive) { lobby.remove(member) }
+                            Button(lobby.isIndividual ? "End call" : "Remove participant", role: .destructive) { lobby.remove(member) }
                                 .disabled(lobby.sending || lobby.approving != nil)
                         }
                     } label: {
@@ -107,23 +121,37 @@ struct LobbyView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(lobby.groupDirectory) { member in
-                DisclosureGroup {
-                    Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
-                        .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    Text(member.id == lobby.localIdentity ? "This device"
-                         : (lobby.trustedName(member.id) != nil ? "Previously verified device key"
-                            : "Unverified device. Verify its security code before joining a call."))
-                        .font(.caption).foregroundStyle(.secondary)
-                } label: {
-                    HStack {
-                        Text(member.id == lobby.localIdentity ? "\(member.name) (you)" : member.name)
-                        Spacer()
-                        Label(member.state.label, systemImage: presenceIcon(member.state))
+                HStack {
+                    DisclosureGroup {
+                        Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
+                            .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        Text(member.id == lobby.localIdentity ? "This device"
+                             : (lobby.trustedName(member.id) != nil ? "Previously verified device key"
+                                : "Unverified device. Verify its security code before joining a call."))
                             .font(.caption).foregroundStyle(.secondary)
+                    } label: {
+                        HStack {
+                            Text(member.id == lobby.localIdentity ? "\(member.name) (you)" : member.name)
+                            Spacer()
+                            Label(member.state.label, systemImage: presenceIcon(member.state))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
                     }
-                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("groupMember-\(member.id)")
+                    if member.id != lobby.localIdentity {
+                        Button { callMember(member.id) } label: {
+                            Image(systemName: "phone.fill")
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Call \(member.name)")
+                        .accessibilityIdentifier("callMember-\(member.id)")
+                        .disabled(callBusy || lobby.waiting || lobby.sending || !lobby.online
+                                  || !lobby.directCallsSupported
+                                  || [.calling, .joining, .inCall].contains(member.state))
+                    }
                 }
-                .accessibilityIdentifier("groupMember-\(member.id)")
             }
         } header: {
             Text("Group members (\(lobby.groupDirectory.count))")
@@ -131,6 +159,8 @@ struct LobbyView: View {
             VStack(alignment: .leading, spacing: 4) {
                 if !lobby.online {
                     Text("Connect to refresh member statuses.")
+                } else if !lobby.directCallsSupported {
+                    Text("Upgrade the relay to enable individual call icons.")
                 } else if !lobby.presenceSupported {
                     Text("Upgrade the relay to see live member statuses.")
                 } else if !lobby.presenceReady {

@@ -189,7 +189,7 @@ another iPhone, manual invitation sharing, verification codes, mute, hang-up, an
 private-CA certificates.
 
 With the updated relay and app on all phones, the **Calls** screen supports
-**Start call**, foreground banner/sound notifications, **Join call**, and caller
+**Start group call**, foreground banner/sound notifications, **Join group call**, and caller
 **Accept / Reject / Ignore** controls. First-time peers independently compare a
 security code; their device keys are remembered in the Keychain. Verified peers
 join with one tap and wait for acceptance. Accepted participants hear and speak
@@ -199,7 +199,12 @@ Configured phones automatically connect on the foreground Calls screen and
 retry disconnected listening connections. Settings pauses automatic attempts;
 returning to Calls resumes them. Calls are never automatically started or rejoined.
 
-One relay/token defines the group. Announcements are visible to every connected
+Phone icons beside group members start individual calls to the selected device.
+Only that device receives the offer/push, only the selected pair can join, and
+either party leaving ends the call. Verified recipients need only Answer;
+first-time device verification is still required. Upgrade both apps and the relay.
+
+One relay/token defines the group. Group announcements are visible to every connected
 group client, but audio is encrypted separately for each admitted pair. Members
 can leave without ending the call; caller departure ends it for everyone. There
 is no extra public port. Optional APNs delivery uses a private device-registration

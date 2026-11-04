@@ -24,8 +24,8 @@ async def group_server():
 
 
 @asynccontextmanager
-async def client(url):
-    device = Device()
+async def client(url, device=None, direct=False):
+    device = device or Device()
     async with connect(
         url, additional_headers={"Authorization": f"Bearer {TOKEN}"}, proxy=None
     ) as socket:
@@ -33,6 +33,8 @@ async def client(url):
         challenge = await recv(socket, "challenge")
         await send(socket, device.registration(challenge["challenge"]))
         await recv(socket, "online")
+        if direct:
+            await send(socket, {"type": "direct-enable"})
         yield socket, device
 
 

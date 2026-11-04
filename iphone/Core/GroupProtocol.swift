@@ -87,6 +87,9 @@ struct GroupRoster {
             members.append(member)
         }
         guard ids.contains(offer.identity) else { throw VoiceError.peer }
+        if let target = offer.target {
+            guard ids == [offer.identity, target], members.count == 2 else { throw VoiceError.peer }
+        }
         self.message = message
         self.members = members
         self.revision = revision

@@ -156,6 +156,29 @@ async def test_cancelled_expired_revoked_and_throttled_pushes():
     await service.close()
 
 
+async def test_individual_push_notifies_only_selected_device():
+    from test_direct_calls import direct_offer
+
+    store = PushDevices(":memory:", TOKEN)
+    caller, target, bystander = Device(), Device(), Device()
+    store.register(target.identity, PUSH_TOKEN, "development", SCOPE)
+    store.register(bystander.identity, "b" * 64, "production", SCOPE)
+    sender = AsyncMock()
+    sender.send.return_value = True
+    service = PushService(store, sender)
+    service.start()
+    try:
+        offer = direct_offer(caller, target.identity)
+        service.announce(offer, lambda: True)
+        await asyncio.wait_for(service.queue.join(), 2)
+        sender.send.assert_awaited_once()
+        device, sent_offer, _ = sender.send.call_args.args
+        assert device.identity == target.identity
+        assert sent_offer == offer
+    finally:
+        await service.close()
+
+
 @pytest.mark.parametrize(
     "environment,host",
     [

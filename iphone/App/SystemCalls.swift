@@ -69,7 +69,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         // Every VoIP push is reported before network work, even stale or malformed ones.
         let id = UUID()
         let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "canddle group")
+        update.remoteHandle = CXHandle(type: .generic, value: "canddle")
         update.localizedCallerName = "Incoming canddle call"
         update.supportsHolding = false
         update.supportsGrouping = false
@@ -104,6 +104,8 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
                     // Display saved names only after checking the caller's signed offer.
                     update.localizedCallerName = identity.trusted[scope + "|" + offer.identity]
                         ?? "Unverified canddle caller"
+                    update.remoteHandle = CXHandle(type: .generic,
+                        value: offer.target == nil ? "canddle group call" : "canddle individual call")
                     self.provider.reportCall(with: id, updated: update)
                     self.backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
                         Task { @MainActor in self?.end(reason: .failed) }
@@ -188,7 +190,8 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         let id = UUID()
         uuid = id
         callID = owner.lobby.ownOffer?.id ?? owner.lobby.joining?.offer.id
-        let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: "canddle group"))
+        let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic,
+            value: owner.lobby.isIndividual ? "canddle individual call" : "canddle group call"))
         controller.request(CXTransaction(action: action)) { [weak self] error in
             guard error != nil else { return }
             Task { @MainActor in self?.end(reason: .failed) }
@@ -231,8 +234,9 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         guard action.callUUID == uuid else { action.fulfill(); return }
+        let declined = offer
         reset()
-        owner?.endSystemCall()
+        owner?.endSystemCall(declining: declined)
         action.fulfill()
     }
 

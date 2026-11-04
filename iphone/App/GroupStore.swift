@@ -22,6 +22,7 @@ final class GroupStore: ObservableObject {
     @Published private(set) var notificationID = UUID()
     @Published private(set) var presenceReady = false
     @Published private(set) var presenceSupported = false
+    @Published private(set) var directCallsSupported = false
     @Published private(set) var presenceTruncated = false
     @Published private(set) var presence: [String: GroupPresence] = [:]
     @Published private(set) var knownNames: [String: String] = [:]
@@ -54,6 +55,7 @@ final class GroupStore: ObservableObject {
     private var ignored = Set<String>()
     private var departed = Set<String>()
     private var autoStart = false
+    private var startTarget: String?
     private var blockedAutomaticAdmissions = Set<String>()
 
     init(loadIdentity: @escaping () throws -> LobbyIdentity = LobbyIdentity.load,
@@ -64,6 +66,8 @@ final class GroupStore: ObservableObject {
 
     var waiting: Bool { ownOffer != nil || joining != nil }
     var isCaller: Bool { ownOffer != nil }
+    var isIndividual: Bool { (ownOffer ?? joining?.offer)?.target != nil }
+    var memberLimit: Int { isIndividual ? 2 : 6 }
     var approving: String? { proposed?.message["revision"] }
     var ownIdentity: String { signing.map { VoiceProtocol.base64($0.publicKey.rawRepresentation) } ?? "" }
     var visibleCandidates: [LobbyCandidate] { candidates.filter { !ignored.contains($0.id) } }
@@ -100,8 +104,8 @@ final class GroupStore: ObservableObject {
         return true
     }
 
-    func connect(_ settings: RelaySettings, startCall: Bool = false) {
-        guard !active else { if startCall { announce() }; return }
+    func connect(_ settings: RelaySettings, startCall: Bool = false, target: String? = nil) {
+        guard !active else { if startCall { announce(target: target) }; return }
         do {
             guard LobbyProtocol.nameValid(name) else {
                 status = "Use a device name of 1-40 printable English characters."; return
@@ -119,6 +123,7 @@ final class GroupStore: ObservableObject {
             scope = settings.url.absoluteString
             sessionName = name
             autoStart = startCall
+            startTarget = target
             let relay = Relay(settings)
             transport = relay
             active = true
@@ -130,11 +135,15 @@ final class GroupStore: ObservableObject {
                     try await relay.openLobby(identity: key, name: sessionName, group: true)
                     guard generation == id else { return }
                     online = true
+                    directCallsSupported = relay.supportsDirectCalls
+                    if directCallsSupported {
+                        try await relay.groupSend(["type": "direct-enable"])
+                    }
                     presenceSupported = relay.supportsPresence
                     if presenceSupported {
                         try await relay.groupSend(["type": "presence-subscribe"])
                     }
-                    status = "Online. Start a call or join an announced call."
+                    status = "Online. Start a group call or call a member."
                     if pushToken != nil {
                         try await relay.groupSend(["type": "push-capabilities"])
                     }
@@ -148,7 +157,11 @@ final class GroupStore: ObservableObject {
                             if generation == id { disconnect("Group connection lost. Reconnecting on Calls.") }
                         }
                     }
-                    if autoStart { autoStart = false; announce() }
+                    if autoStart {
+                        autoStart = false
+                        announce(target: startTarget)
+                        startTarget = nil
+                    }
                     while !Task.isCancelled {
                         let incoming = try await relay.groupReceive()
                         guard generation == id else { return }
@@ -184,6 +197,7 @@ final class GroupStore: ObservableObject {
         offers = []; active = false; online = false; sending = false
         presence = [:]; presenceReady = false; presenceSupported = false; presenceTruncated = false
         autoStart = false
+        startTarget = nil; directCallsSupported = false
         status = message
         pushAvailable = false
         onDisconnected?()
@@ -254,14 +268,19 @@ final class GroupStore: ObservableObject {
         }
     }
 
-    func announce() {
+    func announce(target: String? = nil) {
         guard online, !waiting, !inCall, !sending, let signing else { return }
+        guard target == nil || directCallsSupported else {
+            status = "Upgrade the relay to make individual calls."; return
+        }
         do {
             let key = Curve25519.KeyAgreement.PrivateKey()
-            let offer = try LobbyOffer.create(identity: signing, name: sessionName, ephemeral: key)
+            let offer = try LobbyOffer.create(identity: signing, name: sessionName, ephemeral: key, target: target)
             ephemeral = key; ownOffer = offer
             members = [GroupMember(message: offer.message)]
-            status = "Call announced. Accept join requests below. Waiting expires in two minutes."
+            status = target == nil
+                ? "Group call announced. Accept join requests below. Waiting expires in two minutes."
+                : "Calling the selected device. Waiting expires in two minutes."
             expirePending()
             send([offer.message])
         } catch { disconnect("Could not create an authenticated call.") }
@@ -269,6 +288,7 @@ final class GroupStore: ObservableObject {
 
     func request(_ offer: LobbyOffer) {
         guard online, !waiting, !inCall, !sending, let signing,
+              offer.target == nil || offer.target == ownIdentity,
               offers.contains(where: { $0.id == offer.id }) else { return }
         do {
             let key = Curve25519.KeyAgreement.PrivateKey()
@@ -286,6 +306,34 @@ final class GroupStore: ObservableObject {
                 send([request.message])
             }
         } catch { disconnect("Call announcement could not be authenticated.") }
+    }
+
+    func decline(_ offer: LobbyOffer) {
+        guard online, !sending, offer.target == ownIdentity,
+              offers.contains(where: { $0.id == offer.id }) else { return }
+        send([["type": "direct-decline", "call": offer.id]])
+        offers.removeAll { $0.id == offer.id }
+        notification = nil
+    }
+
+    // A lock-screen decline can arrive before the push-triggered connection is ready.
+    func disconnect(declining offer: LobbyOffer) {
+        guard active, offer.target != nil else { disconnect("Call ended."); return }
+        let id = generation
+        sending = true
+        action?.cancel()
+        action = Task {
+            let until = Date().addingTimeInterval(3)
+            while generation == id && !online && Date() < until {
+                do { try await Task.sleep(nanoseconds: 100_000_000) }
+                catch { return }
+            }
+            guard generation == id else { return }
+            if online, offer.target == ownIdentity, let transport {
+                try? await transport.groupSend(["type": "direct-decline", "call": offer.id])
+            }
+            if generation == id { disconnect("Call ended.") }
+        }
     }
 
     private func confirmation(_ exchange: LobbyExchange) -> [String: String] {
@@ -315,7 +363,8 @@ final class GroupStore: ObservableObject {
 
     func approve(_ candidate: LobbyCandidate) {
         guard let offer = ownOffer, let signing, !sending, proposed == nil,
-              members.count < 6, let current = candidates.first(where: { $0.id == candidate.id }),
+              members.count < memberLimit, let current = candidates.first(where: { $0.id == candidate.id }),
+              offer.target == nil || current.exchange.request.identity == offer.target,
               current.confirmed else { return }
         do {
             try remember(current.exchange.request.identity, name: current.exchange.request.name)
@@ -330,10 +379,11 @@ final class GroupStore: ObservableObject {
     }
 
     private func processAutomaticAdmissions() {
-        guard autoAcceptVerifiedDevices, online, ownOffer != nil, !sending,
-              proposed == nil, departed.isEmpty, members.count < 6,
+        guard let ownOffer, (autoAcceptVerifiedDevices || ownOffer.target != nil), online, !sending,
+              proposed == nil, departed.isEmpty, members.count < memberLimit,
               let candidate = candidates.first(where: {
                   $0.confirmed && !ignored.contains($0.id)
+                      && (ownOffer.target == nil || $0.exchange.request.identity == ownOffer.target)
                       && !blockedAutomaticAdmissions.contains($0.exchange.request.identity)
                       && trustedName($0.exchange.request.identity) != nil
               }) else { return }
@@ -357,6 +407,7 @@ final class GroupStore: ObservableObject {
     func remove(_ member: GroupMember) {
         guard member.id != ownIdentity, let offer = ownOffer, let signing,
               !sending, proposed == nil else { return }
+        if isIndividual { cancelRequest(); return }
         do {
             blockedAutomaticAdmissions.insert(member.id)
             let next = try GroupRoster.create(offer: offer, revision: (roster?.revision ?? 0) + 1,
@@ -368,6 +419,7 @@ final class GroupStore: ObservableObject {
 
     private func processDepartures() {
         guard let offer = ownOffer, let signing, !sending, proposed == nil, !departed.isEmpty else { return }
+        if isIndividual { cancelRequest(); return }
         do {
             let next = try GroupRoster.create(offer: offer, revision: (roster?.revision ?? 0) + 1,
                 members: members.filter { !departed.contains($0.id) }, signing: signing)
@@ -446,9 +498,16 @@ final class GroupStore: ObservableObject {
         case "offer":
             let offer = try LobbyOffer(message)
             if offer.identity == ownIdentity { return }
+            guard offer.target == nil || (directCallsSupported && offer.target == ownIdentity) else {
+                throw VoiceError.peer
+            }
             guard offers.count < 32, !offers.contains(where: { $0.id == offer.id }) else { throw VoiceError.packet }
             offers.append(offer)
-            if !waiting { notify("Incoming call from \(offer.name). Tap Join call below.") }
+            if !waiting {
+                notify(offer.target == nil
+                       ? "Group call from \(offer.name). Tap Join group call below."
+                       : "Individual call from \(offer.name). Tap Answer below.")
+            }
         case "request":
             guard let offer = ownOffer, let ephemeral else { throw VoiceError.peer }
             let request = try LobbyRequest(message, offer: offer)
@@ -494,7 +553,8 @@ final class GroupStore: ObservableObject {
             deadline?.cancel(); deadline = nil
             let first = !inCall
             inCall = true
-            status = "Encrypted group call. \(members.count) participants. Later peers may request to join."
+            status = isIndividual ? "Encrypted individual call. Only the selected two devices can join."
+                : "Encrypted group call. \(members.count) participants. Later peers may request to join."
             if announceJoin && !joinedNames.isEmpty {
                 notify("\(joinedNames.joined(separator: ", ")) joined the call.")
             }

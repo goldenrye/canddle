@@ -47,7 +47,7 @@ struct GroupChecks {
             var saved = (0..<7).map { _ in
                 LobbyIdentity(secret: Curve25519.Signing.PrivateKey().rawRepresentation, trusted: [:])
             }
-            if input.mode.hasPrefix("auto-") {
+            if input.mode.hasPrefix("auto-") || (input.mode.hasPrefix("direct-") && input.mode != "direct-unverified") {
                 let ids = try saved.map {
                     VoiceProtocol.base64(try Curve25519.Signing.PrivateKey(rawRepresentation: $0.secret)
                         .publicKey.rawRepresentation)
@@ -81,6 +81,11 @@ struct GroupChecks {
             precondition(!clients[1].active)
             defer { clients.forEach { $0.disconnect() } }
             let host = clients[0]
+            if input.mode.hasPrefix("direct-") {
+                try await directCallChecks(clients, settings: settings, mode: input.mode)
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode.hasPrefix("auto-") {
                 try await automaticAdmissionChecks(clients, settings: settings, mode: input.mode)
                 print("PASS group \(input.mode)")
@@ -98,6 +103,9 @@ struct GroupChecks {
                 host.connect(settings, startCall: true)
                 try await wait { clients[1].offers.count == 1 && !host.sending }
                 precondition(!clients[1].presenceSupported && !clients[1].presenceReady)
+                precondition(!host.directCallsSupported)
+                clients[1].announce(target: host.ownIdentity)
+                precondition(clients[1].ownOffer == nil)
                 precondition(clients[1].groupDirectory.allSatisfy { $0.state == .unknown })
                 clients[1].request(clients[1].offers[0])
                 try await wait { host.candidates.count == 1 && !clients[1].sending }
@@ -241,6 +249,59 @@ struct GroupChecks {
         }
     }
 
+    @MainActor static func directCallChecks(_ clients: [GroupStore],
+                                            settings: RelaySettings, mode: String) async throws {
+        let host = clients[0], receiver = clients[1], observer = clients[2]
+        receiver.connect(settings)
+        observer.connect(settings)
+        try await wait { receiver.online && observer.online }
+        if mode == "direct-lock-decline" {
+            let target = receiver.ownIdentity
+            try await wait { observer.presence[target] != nil }
+            receiver.disconnect()
+            try await wait { observer.presenceReady && observer.presence[target] == nil }
+            host.connect(settings, startCall: true, target: target)
+            try await wait { host.ownOffer != nil && !host.sending }
+            receiver.connect(settings)
+            precondition(!receiver.online)
+            receiver.disconnect(declining: host.ownOffer!)
+            try await wait { !host.waiting && !receiver.active }
+            precondition(host.online && !host.inCall && !receiver.inCall)
+            return
+        }
+        host.connect(settings, startCall: true, target: receiver.ownIdentity)
+        try await wait { receiver.offers.count == 1 && !host.sending }
+        precondition(host.isIndividual && host.memberLimit == 2)
+        precondition(observer.offers.isEmpty && !receiver.inCall && !host.inCall)
+        precondition(!host.autoAcceptVerifiedDevices)
+        let offer = receiver.offers[0]
+        precondition(offer.target == receiver.ownIdentity)
+        if mode == "direct-decline" {
+            receiver.decline(offer)
+            try await wait { !host.waiting && !receiver.sending }
+            precondition(!host.inCall && !receiver.inCall)
+            return
+        }
+        receiver.request(offer)
+        if mode == "direct-unverified" {
+            try await wait { host.candidates.count == 1 && !receiver.sending }
+            precondition(!host.inCall && !receiver.confirmed)
+            receiver.confirmCaller()
+            try await wait { host.candidates[0].confirmed && !receiver.sending }
+            precondition(!host.inCall && host.approving == nil)
+            precondition(host.candidates[0].exchange.code == receiver.joining?.code)
+            host.approve(host.candidates[0])
+        }
+        try await wait { host.inCall && receiver.inCall && !host.sending && !receiver.sending }
+        precondition(host.members.count == 2 && receiver.memberLimit == 2)
+        precondition(observer.offers.isEmpty && !observer.inCall)
+        try await audio([host, receiver])
+        if mode == "direct-disconnect" { receiver.disconnect() }
+        else { receiver.cancelRequest() }
+        try await wait { !host.waiting && !host.inCall && !receiver.inCall }
+        precondition(host.online && observer.online)
+    }
+
     @MainActor static func automaticAdmissionChecks(_ clients: [GroupStore],
                                                     settings: RelaySettings, mode: String) async throws {
         let host = clients[0], receiver = clients[1]
@@ -310,6 +371,18 @@ struct GroupChecks {
         let hostKey = Curve25519.KeyAgreement.PrivateKey(), peerKey = Curve25519.KeyAgreement.PrivateKey()
         let offer = try LobbyOffer.create(identity: host, name: "Caller", ephemeral: hostKey)
         let request = try LobbyRequest.create(offer: offer, identity: peer, name: "Peer", ephemeral: peerKey)
+        let direct = try LobbyOffer.create(identity: host, name: "Caller", ephemeral: hostKey,
+                                           target: request.identity)
+        let directRequest = try LobbyRequest.create(offer: direct, identity: peer, name: "Peer", ephemeral: peerKey)
+        let pair = [GroupMember(message: direct.message), GroupMember(message: directRequest.message)]
+        _ = try GroupRoster.create(offer: direct, revision: 1, members: pair, signing: host)
+        try rejects {
+            _ = try GroupRoster.create(offer: direct, revision: 1, members: [pair[0]], signing: host)
+        }
+        try rejects {
+            _ = try GroupRoster.create(offer: direct, revision: 1,
+                members: pair + [GroupMember(message: request.message)], signing: host)
+        }
         let snapshot = ["type": "presence", "members": "[[\"\(offer.identity)\",\"Caller\",\"online\"]]",
                         "truncated": "no"]
         let parsedPresence = try GroupPresenceSnapshot(snapshot)

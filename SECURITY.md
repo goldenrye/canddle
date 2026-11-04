@@ -233,7 +233,7 @@ The new iPhone UI uses `{"v":2,"group":true}` on the same authenticated `/relay`
 endpoint. Legacy lobby and group discovery are separate. No extra port or
 database is required. One relay/token defines one announcement group; this is
 not a fine-grained group-membership directory or per-device authorization system.
-Any token holder may discover calls or request admission. Callers must verify
+Any token holder may discover group calls or request admission. Callers must verify
 unknown device identities. Manual acceptance of each participant is the default.
 The opt-in, locally persisted **Auto-accept verified family devices** preference
 authorizes automatic admission of all device keys previously verified on the
@@ -368,6 +368,39 @@ service or suppress updates; authentication does not guarantee delivery, a
 globally consistent view, or instant revocation to disconnected endpoints.
 Use an established, independently reviewed group/media protocol before treating
 this implementation as production-grade secure communications.
+
+### Individual Calls (v2 Extension)
+
+The relay advertises `"direct":"1"` in its registration challenge. New clients
+send `{"type":"direct-enable"}` after registration; unsupported clients are never
+sent individual offers. Missing capability disables individual calling, without
+falling back to group broadcasting.
+
+An individual offer adds `target`, the selected recipient's 32-byte signing key.
+Its signature is `T("direct-offer", O..., target)`, not `T("offer", O...)`.
+Removing or replacing the target invalidates the signature. Request signatures,
+exchange key derivation, confirmation proofs and verification codes include the
+target by appending it to the offer fields. Both clients and the relay reject
+requests from any other identity. Signed rosters must contain exactly the original
+caller and selected recipient, with their original offer/request entries.
+
+An honest relay sends the offer and closure only to these two capable clients,
+including an offline recipient that later connects and opts in. APNs delivery is
+filtered to the selected identity. The selected recipient can decline before
+joining. Decline, withdrawal, rejection, expiry or either party disconnecting ends
+the individual call. Audio uses the existing pairwise encrypted transport.
+
+Explicitly selecting an already verified device authorizes its automatic admission
+after a signed request and valid confirmation, independently of the group
+auto-accept preference. The receiver must explicitly Answer. Unknown keys still
+require independent code comparison and manual verification. The two-person
+restriction is also checked at the endpoints, not just by relay routing.
+
+This is not metadata anonymity: the relay and Apple see public offer metadata,
+and other group members can still see generic presence/calling state. A malicious
+relay could disclose offer metadata but cannot forge a different signed target or
+authorize an outsider in a roster accepted by an honest client. Either authorized
+endpoint can still record or forward audio.
 
 ## Authenticated Key Exchange (Manual Calls)
 

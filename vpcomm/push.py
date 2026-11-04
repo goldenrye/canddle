@@ -214,6 +214,8 @@ class PushService:
             return
         self.last_call[caller] = now
         for device in self.devices.recipients(caller):
+            if offer.get("target") is not None and device.identity != offer["target"]:
+                continue
             try:
                 self.queue.put_nowait((device, dict(offer), int(now + 30), available))
             except asyncio.QueueFull:

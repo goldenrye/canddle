@@ -46,29 +46,38 @@ struct LobbyOffer: Identifiable {
     var identity: String { message["identity"]! }
     var ephemeral: String { message["ephemeral"]! }
     var name: String { message["name"]! }
-    var fields: [String] { [id, identity, ephemeral, name] }
+    var target: String? { message["target"] }
+    var fields: [String] { [id, identity, ephemeral, name] + (target.map { [$0] } ?? []) }
 
     init(_ message: [String: String]) throws {
-        guard Set(message.keys) == ["type", "call", "identity", "ephemeral", "name", "signature"],
+        let keys: Set<String> = ["type", "call", "identity", "ephemeral", "name", "signature"]
+        guard Set(message.keys) == keys.union(message["target"] == nil ? [] : ["target"]),
               message["type"] == "offer", LobbyProtocol.nameValid(message["name"]!) else {
             throw VoiceError.packet
         }
         self.message = message
         _ = try VoiceProtocol.decode(id, size: 16)
         _ = try VoiceProtocol.decode(ephemeral, size: 32)
-        try LobbyProtocol.verify(identity, message["signature"]!, LobbyProtocol.transcript("offer", fields))
+        if let target {
+            _ = try VoiceProtocol.decode(target, size: 32)
+            guard target != identity else { throw VoiceError.peer }
+        }
+        try LobbyProtocol.verify(identity, message["signature"]!,
+                                 LobbyProtocol.transcript(target == nil ? "offer" : "direct-offer", fields))
     }
 
     static func create(identity: Curve25519.Signing.PrivateKey, name: String,
-                       ephemeral: Curve25519.KeyAgreement.PrivateKey) throws -> LobbyOffer {
+                       ephemeral: Curve25519.KeyAgreement.PrivateKey,
+                       target: String? = nil) throws -> LobbyOffer {
         var message = [
             "type": "offer", "call": LobbyProtocol.randomID(), "name": name,
             "identity": VoiceProtocol.base64(identity.publicKey.rawRepresentation),
             "ephemeral": VoiceProtocol.base64(ephemeral.publicKey.rawRepresentation)
         ]
-        let fields = ["call", "identity", "ephemeral", "name"].map { message[$0]! }
+        if let target { message["target"] = target }
+        let fields = ["call", "identity", "ephemeral", "name"].map { message[$0]! } + (target.map { [$0] } ?? [])
         message["signature"] = VoiceProtocol.base64(
-            try identity.signature(for: LobbyProtocol.transcript("offer", fields))
+            try identity.signature(for: LobbyProtocol.transcript(target == nil ? "offer" : "direct-offer", fields))
         )
         return try Self(message)
     }
@@ -86,6 +95,7 @@ struct LobbyRequest: Identifiable {
         guard Set(message.keys) == ["type", "call", "request", "identity", "ephemeral", "name", "signature"],
               message["type"] == "request", message["call"] == offer.id,
               message["identity"] != offer.identity,
+              offer.target == nil || message["identity"] == offer.target,
               LobbyProtocol.nameValid(message["name"]!) else { throw VoiceError.packet }
         self.message = message
         _ = try VoiceProtocol.decode(id, size: 16)
@@ -120,11 +130,12 @@ struct IncomingCallPush {
               let expires = payload["expires"] as? Double,
               expires.isFinite, expires >= now, expires <= now + 60,
               let message = payload["offer"] as? [String: String],
-              message.count == 6, message.values.allSatisfy({ $0.utf8.count <= 256 }) else {
+              (6...7).contains(message.count), message.values.allSatisfy({ $0.utf8.count <= 256 }) else {
             throw VoiceError.packet
         }
         offer = try LobbyOffer(message)
         guard offer.identity != recipient else { throw VoiceError.peer }
+        guard offer.target == nil || offer.target == recipient else { throw VoiceError.peer }
     }
 }
 

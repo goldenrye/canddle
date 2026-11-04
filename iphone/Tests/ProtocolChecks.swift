@@ -76,6 +76,31 @@ struct ProtocolChecks {
             }
         }
         let request = try LobbyRequest.create(offer: offer, identity: signingB, name: "Bob", ephemeral: ephemeralB)
+        let direct = try LobbyOffer.create(identity: signingA, name: "Alice", ephemeral: ephemeralA, target: receiver)
+        var stripped = direct.message
+        stripped.removeValue(forKey: "target")
+        try rejects { _ = try LobbyOffer(stripped) }
+        var retargeted = direct.message
+        retargeted["target"] = VoiceProtocol.base64(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation)
+        try rejects { _ = try LobbyOffer(retargeted) }
+        try rejects {
+            _ = try LobbyRequest.create(offer: direct, identity: Curve25519.Signing.PrivateKey(),
+                                        name: "Outsider", ephemeral: ephemeralB)
+        }
+        try rejects { _ = try LobbyRequest(request.message, offer: direct) }
+        let directRequest = try LobbyRequest.create(offer: direct, identity: signingB, name: "Bob", ephemeral: ephemeralB)
+        let directCaller = try LobbyExchange(offer: direct, request: directRequest, ephemeral: ephemeralA, caller: true)
+        let directJoiner = try LobbyExchange(offer: direct, request: directRequest, ephemeral: ephemeralB, caller: false)
+        precondition(directCaller.code == directJoiner.code)
+        try directCaller.verifyConfirmation(directJoiner.confirmation())
+        var directPush = push
+        directPush["offer"] = direct.message
+        _ = try IncomingCallPush(directPush, scope: "wss://example.com/relay", recipient: receiver, now: 1000)
+        let other = VoiceProtocol.base64(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation)
+        directPush["recipient"] = other
+        try rejects {
+            _ = try IncomingCallPush(directPush, scope: "wss://example.com/relay", recipient: other, now: 1000)
+        }
         let caller = try LobbyExchange(offer: offer, request: request, ephemeral: ephemeralA, caller: true)
         let joiner = try LobbyExchange(offer: offer, request: request, ephemeral: ephemeralB, caller: false)
         precondition(caller.code == joiner.code)

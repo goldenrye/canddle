@@ -83,7 +83,8 @@ struct CallView: View {
                     }
                 } else if !call.busy || call.groupAudio {
                     LobbyView(lobby: lobby, callBusy: call.busy,
-                              startCall: { call.openLobby(startCall: true) })
+                              startCall: { call.openLobby(startCall: true) },
+                              callMember: { call.openLobby(startCall: true, target: $0) })
                 }
             }
             .navigationTitle("Calls")
@@ -112,7 +113,8 @@ struct CallView: View {
                             else { lobby.cancelRequest() }
                         } label: {
                             Label(call.pairing ? "Cancel pairing" :
-                                    (lobby.inCall ? (lobby.isCaller ? "End for everyone" : "Leave call") : "Cancel"),
+                                    (lobby.inCall ? (lobby.isIndividual ? "End call" :
+                                        (lobby.isCaller ? "End for everyone" : "Leave call")) : "Cancel"),
                                   systemImage: "phone.down.fill")
                         }.accessibilityIdentifier("hangUp")
                             .disabled(!call.busy && (lobby.sending || lobby.approving != nil))

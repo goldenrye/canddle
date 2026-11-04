@@ -226,6 +226,8 @@ final class InterfaceTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["lobbyAnnounce"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["lobbyAnnounce"].isHittable)
+        XCTAssertEqual(app.buttons["lobbyAnnounce"].label, "Start group call")
+        XCTAssertFalse(app.buttons["Start call"].exists)
         automaticConnection(app)
         XCTAssertFalse(app.textFields["address"].exists)
         settings(app)

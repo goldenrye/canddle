@@ -63,12 +63,12 @@ If the administrator rotates the shared relay token, pair again.
 1. Upgrade the relay (`docker compose up -d --build`) and install the updated app
    on every phone. Keep the same WSS address and saved access token.
 2. Set a recognizable device name in **Settings**, then tap the checkmark icon beside it to save. On **Calls**, receivers
-   connect automatically and keep the app open. The caller taps **Start call**, which
+   connect automatically and keep the app open. The caller taps **Start group call**, which
    connects automatically if needed and announces the call.
 3. Other connected clients receive an in-app banner and a system alert sound
    (subject to device sound settings). A phone connecting later also sees the
-   ongoing call. Tap **Join call** to request admission.
-4. For a previously verified caller, Join call is the only requester action.
+   ongoing call. Tap **Join group call** to request admission.
+4. For a previously verified caller, Join group call is the only requester action.
    By default the caller chooses **Accept**, **Reject**, or **Ignore** for each request.
    Ignore hides the request locally; it expires without granting access.
 5. On a first call with an **unverified** device, compare the entire displayed
@@ -103,7 +103,7 @@ not remove existing participants. Settings changes are unavailable during a call
 The group is the set of people provisioned with this relay's access token,
 not a separate contacts database or named-group feature. Use separate relay
 instances for independently managed groups. Every online group client can see
-announcements, but only accepted participants receive authenticated media links.
+group announcements, but only accepted participants receive authenticated media links.
 Participants trust the verified caller to authorize the roster; they do not
 individually verify every other member. Always check the participant list.
 
@@ -163,6 +163,28 @@ accessible after the first unlock following reboot. Invitations and ephemeral
 encryption keys are never stored. Failed trust writes prevent confirmation or
 approval, rather than silently treating the peer as verified.
 
+### Individual Calls
+
+Tap the **phone icon** beside another device in **Group members** to call only
+that device. The receiver sees **Individual call** with **Answer** and **Decline**.
+The selected public device key is signed into the invitation; other group members
+do not receive the offer or push and cannot join. These calls allow exactly two
+devices and end when either leaves or disconnects. They cannot become group calls.
+
+Selecting a previously verified device authorizes admission after it explicitly
+answers and confirms the handshake, without another caller Accept tap. This is
+independent of the group auto-accept preference. First-time devices still require
+independent security-code comparison and manual verification on both phones.
+Incoming calls are never automatically answered.
+
+Upgrade both apps and rebuild the relay. Older relays leave individual-call icons
+disabled; older recipient apps cannot answer individual offers. There is no
+fallback to a group call. Icons are disabled during another call and for members
+reported busy. Saved offline peers can be called, but ringing requires working
+APNs registration and provisioning. Keep the caller foregrounded until answered.
+Relay presence still exposes generic calling/in-call status, not the selected
+partner or the private offer to other members.
+
 ### Manual Connection Setup
 
 1. Open **Settings > Enter connection manually**.
@@ -175,7 +197,7 @@ approval, rather than silently treating the peer as verified.
 The legacy **Start / Join**, **New invitation**, paste and copy controls have been
 removed from the iPhone interface. Legacy transport remains in the codebase for
 compatibility tests; desktop manual calls still work with the relay. The current
-iPhone interface is group-call only.
+iPhone interface supports group and individual calls using group v2 signaling.
 
 The address and token are stored together in the iPhone Keychain, accessible
 after the first unlock following reboot, without iCloud synchronization or migration to another
@@ -232,7 +254,8 @@ No relay address, access token, invitation, or CA private key is bundled.
   Backgrounding closes idle signaling sockets, not accepted CallKit audio.
 - No system contacts, automatic call rejoining, or accounts.
 - The lobby exposes call availability, public device keys, names, and request/
-  approval timing to the relay. All online lobby peers see announcements.
+  approval timing to the relay. Group announcements are shared with online peers;
+  individual announcements are routed only to the caller and selected recipient.
 - No app-managed recording, analytics, or cloud storage. Relay details persist
   in the device-only Keychain, along with lobby identity and verified peer keys;
   invitations and session keys exist only in memory.
@@ -354,6 +377,9 @@ verify actual device Keychain permissions or persistence.
 Group tests cover pairwise encryption, epoch binding, tampering/replay, local
 mixing, late joins, removal/rejoin, caller departure, capacity, ignore/reject,
 membership-update races, and live all-to-all traffic over TLS.
+Individual-call checks cover signed recipient binding, outsider rejection,
+recipient-only discovery/push, two-person rosters, verified admission, first-time
+verification, decline, cancellation, expiry, disconnect and encrypted audio.
 
 ## Physical-Device Acceptance
 

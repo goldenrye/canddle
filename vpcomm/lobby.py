@@ -26,7 +26,8 @@ def transcript(purpose, *fields):
 
 
 def offer_fields(offer):
-    return [offer[k] for k in ("call", "identity", "ephemeral", "name")]
+    fields = [offer[k] for k in ("call", "identity", "ephemeral", "name")]
+    return fields + [offer["target"]] if "target" in offer else fields
 
 
 def request_fields(offer, request):
@@ -59,6 +60,7 @@ class Peer:
     joined: str | None = None
     media_allowance: float = 600
     media_last: float = field(default_factory=time.monotonic)
+    direct_calls: bool = False
 
     def emit(self, message):
         try:
@@ -104,6 +106,22 @@ class Lobby:
     def presence_changed(self):
         pass
 
+    def visible_offer(self, offer, peer):
+        return True
+
+    def broadcast_offer(self, offer, message):
+        for peer in tuple(self.peers.values()):
+            if self.visible_offer(offer, peer):
+                peer.emit(message)
+
+    def validate_offer(self, peer, message):
+        if set(message) != {"type", "call", "identity", "ephemeral", "name", "signature"}:
+            raise ValueError("Invalid offer")
+        decode(message["call"], 16)
+        decode(message["ephemeral"], 32)
+        self.check_sender(peer, message)
+        verify(peer.identity, message["signature"], transcript("offer", *offer_fields(message)))
+
     def close_offer(self, call, reason="closed"):
         offer = self.offers.pop(call, None)
         if offer is None:
@@ -113,7 +131,7 @@ class Lobby:
         offer.owner.offer = None
         for peer, _, _ in offer.requests.values():
             peer.request = None
-        self.broadcast({"type": "closed", "call": call, "reason": reason})
+        self.broadcast_offer(offer, {"type": "closed", "call": call, "reason": reason})
 
     def remove_request(self, offer, request, reason):
         peer, _, _ = offer.requests.pop(request)
@@ -153,7 +171,8 @@ class Lobby:
             writer.add_done_callback(lambda _: socket.transport.abort())
             peer.emit({"type": "online"})
             for offer in self.offers.values():
-                peer.emit(offer.message)
+                if self.visible_offer(offer, peer):
+                    peer.emit(offer.message)
             self.presence_changed()
             async with asyncio.timeout(self.session_lifetime):
                 while True:
@@ -213,21 +232,16 @@ class Lobby:
             peer.emit({"type": "pong"})
             return
         if kind == "offer":
-            if set(message) != {"type", "call", "identity", "ephemeral", "name", "signature"}:
-                raise ValueError("Invalid offer")
+            self.validate_offer(peer, message)
             if peer.offer or peer.request or message["call"] in self.offers:
                 raise ValueError("Device busy")
-            decode(message["call"], 16)
-            decode(message["ephemeral"], 32)
-            self.check_sender(peer, message)
-            verify(peer.identity, message["signature"], transcript("offer", *offer_fields(message)))
             offer = Offer(peer, message)
             self.offers[message["call"]] = offer
             peer.offer = message["call"]
             offer.expiry = asyncio.get_running_loop().call_later(
                 self.lifetime, self.close_offer, peer.offer, "expired"
             )
-            self.broadcast(message)
+            self.broadcast_offer(offer, message)
             return
         if kind == "request":
             if set(message) != {
