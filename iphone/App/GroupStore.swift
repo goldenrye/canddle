@@ -74,12 +74,14 @@ final class GroupStore: ObservableObject {
     func trustedName(_ key: String) -> String? { trusted[scope + "|" + key] }
 
     var groupDirectory: [GroupPresence] {
-        var names = knownNames
-        for member in presence.values { names[member.id] = member.name }
+        var names: [String: String] = [:]
         let prefix = scope + "|"
         for (key, value) in trusted where key.hasPrefix(prefix) {
             names[String(key.dropFirst(prefix.count))] = value
         }
+        // Saved trust names are fallbacks, not overrides for current device names.
+        names.merge(knownNames) { _, latest in latest }
+        for member in presence.values { names[member.id] = member.name }
         if !localIdentity.isEmpty { names[localIdentity] = name }
         return names.map { key, value in
             let state = presence[key]?.state

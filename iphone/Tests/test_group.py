@@ -27,6 +27,7 @@ TOKEN = "group-test-" + "a" * 40
         "caller-save-failure",
         "tls",
         "legacy-presence",
+        "rename-directory",
         "auto-enabled",
         "auto-disabled",
         "auto-unverified",

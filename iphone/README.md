@@ -107,6 +107,11 @@ group announcements, but only accepted participants receive authenticated media 
 Participants trust the verified caller to authorize the roster; they do not
 individually verify every other member. Always check the participant list.
 
+When idle, Calls shows **Group members** above **Start group call**. **Available
+calls** appears below only when there is a group call to join or an individual
+call to answer; there is no empty-call placeholder. Active call controls and
+verification requests remain above the directory during a call.
+
 The **Group members** list on Calls shows this device, devices seen on the relay
 during this app session, and saved verified peers for the same relay. Statuses are
 **Online**, **Calling**, **Joining**, **In call**, **Not connected**, or **Unknown**.
@@ -153,7 +158,11 @@ Device names can be edited without first going offline: the checkmark save icon 
 idle connection and remembers the name locally across launches. Use 1-40 printable
 English characters. Names cannot change during a call or pending join request.
 The **About** section in Settings shows the installed app version and build number.
-Previously verified peers may continue displaying the name they saved for your key.
+After saving, return to Calls to reconnect and publish the new name. Peers' group
+member lists show the latest received name, retaining it while you are offline
+for that app session. The original name remains in the expanded identity details
+as **Name when verified**; renaming does not change device-key trust. Without a
+current or session-cached name, the list falls back to the saved verified name.
 **Advanced > Reset saved settings >**
 **Forget verified peers** removes all saved peer trust (up to 100 keys across
 relays) while retaining your own device identity. In the same section, **Forget saved relay** deletes

@@ -8,6 +8,7 @@ struct LobbyView: View {
 
     var body: some View {
         if !lobby.waiting && !callBusy {
+            memberDirectory
             Section {
                 Button(action: startCall) {
                     Label("Start group call", systemImage: "person.2.fill")
@@ -17,14 +18,10 @@ struct LobbyView: View {
                 .accessibilityIdentifier("lobbyAnnounce")
                 .disabled(lobby.sending || (lobby.active && !lobby.online))
             } footer: {
-                Text("Invite the group, or use a member's phone icon for an individual call.")
+                Text("Invite everyone on this relay.")
             }
-            if lobby.online {
+            if lobby.online && !lobby.offers.isEmpty {
                 Section("Available calls") {
-                    if lobby.offers.isEmpty {
-                        Label("No calls right now", systemImage: "phone.badge.waveform")
-                            .foregroundStyle(.secondary)
-                    }
                     ForEach(lobby.offers) { offer in
                         VStack(alignment: .leading, spacing: 8) {
                             peer(offer.identity, name: offer.name)
@@ -115,6 +112,12 @@ struct LobbyView: View {
                 }
             }
         }
+        if lobby.waiting || callBusy {
+            memberDirectory
+        }
+    }
+
+    private var memberDirectory: some View {
         Section {
             if lobby.groupDirectory.isEmpty {
                 Text("Members appear when devices connect to this relay.")
@@ -129,6 +132,11 @@ struct LobbyView: View {
                              : (lobby.trustedName(member.id) != nil ? "Previously verified device key"
                                 : "Unverified device. Verify its security code before joining a call."))
                             .font(.caption).foregroundStyle(.secondary)
+                        if member.id != lobby.localIdentity,
+                           let saved = lobby.trustedName(member.id), saved != member.name {
+                            Text("Name when verified: \(saved)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     } label: {
                         HStack {
                             Text(member.id == lobby.localIdentity ? "\(member.name) (you)" : member.name)
@@ -155,6 +163,7 @@ struct LobbyView: View {
             }
         } header: {
             Text("Group members (\(lobby.groupDirectory.count))")
+                .accessibilityIdentifier("groupMembersHeader")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if !lobby.online {
@@ -168,9 +177,8 @@ struct LobbyView: View {
                 } else if lobby.presenceTruncated {
                     Text("Only the first 32 connected devices are shown. Other statuses are unknown.")
                 }
-                Text("Relay-reported connection status, not microphone or delivery status. "
-                     + "A device marked Not connected may still receive calls through Apple push. "
-                     + "Includes devices seen this session and saved verified peers.")
+                Text("Tap a phone icon to call one device. Status is relay-reported; "
+                     + "offline devices may still ring through Apple push.")
             }
         }
     }

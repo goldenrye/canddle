@@ -228,6 +228,11 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(app.buttons["lobbyAnnounce"].isHittable)
         XCTAssertEqual(app.buttons["lobbyAnnounce"].label, "Start group call")
         XCTAssertFalse(app.buttons["Start call"].exists)
+        let membersHeader = app.staticTexts["groupMembersHeader"]
+        XCTAssertTrue(membersHeader.exists)
+        XCTAssertLessThan(membersHeader.frame.maxY, app.buttons["lobbyAnnounce"].frame.minY)
+        XCTAssertFalse(app.staticTexts["Available calls"].exists)
+        XCTAssertFalse(app.staticTexts["No calls right now"].exists)
         automaticConnection(app)
         XCTAssertFalse(app.textFields["address"].exists)
         settings(app)

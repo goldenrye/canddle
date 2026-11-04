@@ -504,6 +504,9 @@ Snapshots are bounded to 32 entries, coalesced, and sent only when changed.
 Presence is relay-asserted metadata, not end-to-end proof of identity or audio
 activity, and never grants admission or bypasses peer verification. Discovered
 names are cached in memory (up to 128); saved verified names remain relay-scoped.
+The group directory prefers current, then session-cached names over saved verified
+names. A differing original verified name remains visible in identity details;
+presence updates never overwrite saved trust or change admission decisions.
 Disconnected devices may still be reachable by APNs. No push tokens, access
 tokens, or private keys are included in presence messages.
 

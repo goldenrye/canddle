@@ -47,6 +47,15 @@ struct GroupChecks {
             var saved = (0..<7).map { _ in
                 LobbyIdentity(secret: Curve25519.Signing.PrivateKey().rawRepresentation, trusted: [:])
             }
+            if input.mode == "rename-directory" {
+                let ids = try saved.map {
+                    VoiceProtocol.base64(try Curve25519.Signing.PrivateKey(rawRepresentation: $0.secret)
+                        .publicKey.rawRepresentation)
+                }
+                saved[0].trusted[settings.url.absoluteString + "|" + ids[1]] = "Original verified name"
+                saved[0].trusted[settings.url.absoluteString + "|" + ids[2]] = "Saved offline device"
+                saved[0].trusted["wss://other.example/relay|" + ids[3]] = "Other relay device"
+            }
             if input.mode.hasPrefix("auto-") || (input.mode.hasPrefix("direct-") && input.mode != "direct-unverified") {
                 let ids = try saved.map {
                     VoiceProtocol.base64(try Curve25519.Signing.PrivateKey(rawRepresentation: $0.secret)
@@ -81,6 +90,11 @@ struct GroupChecks {
             precondition(!clients[1].active)
             defer { clients.forEach { $0.disconnect() } }
             let host = clients[0]
+            if input.mode == "rename-directory" {
+                try await directoryRenameChecks(clients, settings: settings)
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode.hasPrefix("direct-") {
                 try await directCallChecks(clients, settings: settings, mode: input.mode)
                 print("PASS group \(input.mode)")
@@ -247,6 +261,48 @@ struct GroupChecks {
             print("FAIL group \(String(describing: error))")
             exit(1)
         }
+    }
+
+    @MainActor static func directoryRenameChecks(_ clients: [GroupStore],
+                                                 settings: RelaySettings) async throws {
+        let observer = clients[0], peer = clients[1]
+        let peerID = peer.localIdentity
+        observer.connect(settings)
+        try await wait { observer.presenceReady }
+        precondition(observer.trustedName(peerID) == "Original verified name")
+        precondition(observer.groupDirectory.contains {
+            $0.id == peerID && $0.name == "Original verified name" && $0.state == .disconnected
+        })
+        precondition(observer.groupDirectory.contains { $0.name == "Saved offline device" })
+        precondition(!observer.groupDirectory.contains { $0.name == "Other relay device" })
+
+        peer.connect(settings)
+        try await wait { observer.presence[peerID]?.name == "Renamed Phone" }
+        precondition(observer.groupDirectory.contains {
+            $0.id == peerID && $0.name == "Renamed Phone" && $0.state == .online
+        })
+        precondition(peer.rename("Kitchen iPhone"))
+        try await wait { observer.presence[peerID] == nil }
+        peer.connect(settings)
+        try await wait { observer.presence[peerID]?.name == "Kitchen iPhone" }
+        precondition(observer.groupDirectory.contains {
+            $0.id == peerID && $0.name == "Kitchen iPhone" && $0.state == .online
+        })
+        precondition(peer.groupDirectory.first?.name == "Kitchen iPhone")
+        precondition(observer.trustedName(peerID) == "Original verified name")
+        peer.disconnect()
+        try await wait { observer.presence[peerID] == nil }
+        precondition(observer.groupDirectory.contains {
+            $0.id == peerID && $0.name == "Kitchen iPhone" && $0.state == .disconnected
+        })
+        observer.disconnect()
+        precondition(observer.groupDirectory.contains {
+            $0.id == peerID && $0.name == "Kitchen iPhone" && $0.state == .unknown
+        })
+        observer.connect(settings)
+        try await wait { observer.presenceReady }
+        precondition(observer.groupDirectory.contains { $0.id == peerID && $0.name == "Kitchen iPhone" })
+        precondition(observer.trustedName(peerID) == "Original verified name")
     }
 
     @MainActor static func directCallChecks(_ clients: [GroupStore],
