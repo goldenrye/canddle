@@ -35,6 +35,14 @@ for high-sensitivity use.
 - AWS, the network, and the relay can observe source IPs, connection timing,
   duration, packet sizes, approximate usage, and denial-of-service effects.
   The relay also sees room identifiers and ephemeral public handshake data.
+- During WebRTC calls, iPhones send the relay a redacted quality summary every
+  ten seconds per link: candidate types and transports (for example
+  `relay/tcp>srflx/udp`), RTT, jitter, loss, concealment, packet/bit rates,
+  microphone/playout RMS level in dBFS, and the mute flag. It contains no
+  addresses, ports, SDP, ICE credentials or audio. The relay logs it with
+  8-hex SHA-256 tags instead of call IDs and device keys; set
+  `VPCOMM_QUALITY_LOG=0` to stop logging it. Levels reveal when someone is
+  speaking, which is comparable to the packet-timing metadata above.
 - No anonymity, metadata-hiding, censorship-resistance, or availability claim
   is made. Network operators can block this traffic.
 - Python does not guarantee erasure of secret material from memory. Process

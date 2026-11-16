@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
@@ -16,7 +17,14 @@ from vpcomm.crypto import encode
 from vpcomm.lobby import offer_fields, transcript
 from vpcomm.push import PushDevices, PushService
 from vpcomm.server import Relay, build_server
-from vpcomm.webrtc import TURNConfig, from_environment, signal_fields, validate_sdp
+from vpcomm.webrtc import (
+    TURNConfig,
+    from_environment,
+    parse_quality,
+    pseudonym,
+    signal_fields,
+    validate_sdp,
+)
 
 TURN = TURNConfig(("turn:turn.example.com:3478?transport=udp",), "test-secret-" * 4)
 SDP = (
@@ -282,3 +290,78 @@ async def test_webrtc_push_capability_and_database_migration(tmp_path):
     store.register(modern.identity, "a" * 64, "production", "wss://voice.example/relay")
     assert not any(d.webrtc for d in store.recipients(caller.identity))
     store.close()
+
+
+def quality_link(to, **overrides):
+    return {
+        "to": to,
+        "route": "relay/tcp>srflx/udp",
+        "secs": 10.0,
+        "rtt_ms": 248.5,
+        "jitter_ms": 12.0,
+        "loss_in": 1.5,
+        "loss_out": 0.0,
+        "conceal": 3.2,
+        "jb_ms": 80.0,
+        "rx_pps": 50.0,
+        "tx_pps": 0.0,
+        "rx_kbps": 32.1,
+        "tx_kbps": 0.0,
+        "mic_db": -127.0,
+        "muted": True,
+        **overrides,
+    }
+
+
+async def test_quality_report_logged_without_identifiers(caplog):
+    caplog.set_level(logging.INFO, logger="vpcomm.quality")
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        announcement, _, _ = await admit(a, alice, b, bob)
+        links = json.dumps([quality_link(alice.identity)])
+        await send(b, {"type": "rtc-quality", "call": announcement["call"], "links": links})
+        # Malformed or stale reports are dropped without ending the call.
+        bad = json.dumps([quality_link(alice.identity, route="198.51.100.7")])
+        await send(b, {"type": "rtc-quality", "call": announcement["call"], "links": bad})
+        await send(b, {"type": "rtc-quality", "call": encode(bytes(16)), "links": links})
+        await send(b, {"type": "presence-subscribe"})
+        await recv(b, "presence")
+    lines = [r.getMessage() for r in caplog.records if r.name == "vpcomm.quality"]
+    assert len(lines) == 2
+    assert lines[0].startswith(f"quality call={pseudonym(announcement['call'])} ")
+    assert f"from={pseudonym(bob.identity)} to={pseudonym(alice.identity)}" in lines[0]
+    assert "route=relay/tcp>srflx/udp muted=1" in lines[0] and "rtt_ms=248.5" in lines[0]
+    assert lines[1] == f"quality report rejected from={pseudonym(bob.identity)}"
+    text = "\n".join(lines)
+    for secret in (alice.identity, bob.identity, announcement["call"], "198.51.100.7"):
+        assert secret not in text
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda me, other: [],
+        lambda me, other: [quality_link(me)],
+        lambda me, other: [quality_link("someone-else")],
+        lambda me, other: [quality_link(other)] * 2,
+        lambda me, other: [quality_link(other, rtt_ms=-1)],
+        lambda me, other: [quality_link(other, loss_in=101)],
+        lambda me, other: [quality_link(other, rtt_ms=True)],
+        lambda me, other: [quality_link(other, muted="no")],
+        lambda me, other: [quality_link(other, extra=1)],
+        lambda me, other: [{k: v for k, v in quality_link(other).items() if k != "route"}],
+    ],
+)
+def test_invalid_quality_reports(mutation):
+    with pytest.raises(ValueError):
+        parse_quality(json.dumps(mutation("me", "other")), "me", {"me": {}, "other": {}})
+    assert parse_quality(json.dumps([quality_link("other")]), "me", {"me": {}, "other": {}})
+    with pytest.raises(ValueError):
+        parse_quality(json.dumps([quality_link("other", rtt_ms=float("nan"))]), "me", {"other": {}})
+
+
+async def test_quality_requires_webrtc_and_structure():
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        announcement, _, _ = await admit(a, alice, b, bob)
+        await send(b, {"type": "rtc-quality", "call": announcement["call"]})
+        with pytest.raises(ConnectionClosed):
+            await b.recv()

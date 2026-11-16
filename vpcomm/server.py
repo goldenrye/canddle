@@ -283,6 +283,10 @@ def main():
     parser.add_argument("--call-timeout", type=float, default=3600)
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    # Redacted, client-reported call quality (no addresses, SDP or audio).
+    logging.getLogger("vpcomm.quality").setLevel(
+        logging.INFO if os.environ.get("VPCOMM_QUALITY_LOG", "1") != "0" else logging.WARNING
+    )
     try:
         asyncio.run(run(args))
     except (ValueError, OSError) as exc:

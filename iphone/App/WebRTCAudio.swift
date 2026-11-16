@@ -19,6 +19,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         var localDelivered = false
         var remoteSet = false
         var remoteApplied = false
+        var quality: WebRTCQualitySample?
         init(peer: String, connection: RTCPeerConnection) {
             self.peer = peer
             self.connection = connection
@@ -39,6 +40,9 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     var onFailure: ((String) -> Void)?
     var onConnected: ((Bool) -> Void)?
     var onProgress: ((String) -> Void)?
+    /// Redacted per-link interval statistics, emitted every `WebRTCQualityLink.interval` seconds.
+    var onQuality: (([WebRTCQualityLink]) -> Void)?
+    private var sampler: Task<Void, Never>?
 
     static func prepare() {
         let audio = RTCAudioSession.sharedInstance()
@@ -75,6 +79,46 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         track = Self.factory.audioTrack(withTrackId: "canddle-audio")
         try update(session)
         RTCAudioSession.sharedInstance().isAudioEnabled = true
+        sampler = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: WebRTCQualityLink.interval * 1_000_000_000) }
+                catch { return }
+                guard let self, !self.stopped else { return }
+                await self.sampleQuality()
+            }
+        }
+    }
+
+    private static func sample(_ connection: RTCPeerConnection) async -> WebRTCQualitySample {
+        await withCheckedContinuation { continuation in
+            connection.statistics { report in
+                var stats: [String: WebRTCStat] = [:]
+                for (id, entry) in report.statistics {
+                    var stat = WebRTCStat(type: entry.type)
+                    for (key, value) in entry.values {
+                        if let number = value as? NSNumber { stat.numbers[key] = number.doubleValue }
+                        else if let text = value as? String, text.utf8.count <= 128 { stat.strings[key] = text }
+                    }
+                    stats[id] = stat
+                }
+                continuation.resume(returning: WebRTCQualitySample(stats, seconds: report.timestamp_us / 1_000_000))
+            }
+        }
+    }
+
+    private func sampleQuality() async {
+        var reports: [WebRTCQualityLink] = []
+        let muted = !(track?.isEnabled ?? false)
+        for link in links.values.sorted(by: { $0.peer < $1.peer }) where link.connection.connectionState == .connected {
+            let next = await Self.sample(link.connection)
+            guard current(link) else { continue }
+            if let previous = link.quality,
+               let report = WebRTCQualityLink(peer: link.peer, from: previous, to: next, muted: muted) {
+                reports.append(report)
+            }
+            link.quality = next
+        }
+        if !stopped, !reports.isEmpty { onQuality?(Array(reports.prefix(5))) }
     }
 
     func update(_ next: WebRTCSession) throws {
@@ -270,6 +314,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
 
     func stop() {
         stopped = true
+        sampler?.cancel(); sampler = nil
         track?.isEnabled = false
         closeLinks()
         track = nil

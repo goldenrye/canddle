@@ -3,11 +3,37 @@
 import base64
 import hashlib
 import hmac
+import json
+import logging
+import math
 import os
 import re
 import time
 from dataclasses import dataclass
 
+QUALITY_LOG = logging.getLogger("vpcomm.quality")
+QUALITY_LIMIT = 4096
+QUALITY_ROUTE = re.compile(
+    r"(?:(?:host|srflx|prflx|relay)(?:/(?:udp|tcp|tls))?|unknown)>"
+    r"(?:(?:host|srflx|prflx|relay)(?:/(?:udp|tcp|tls))?|unknown)"
+)
+# Field -> (minimum, maximum). Client-reported, redacted interval statistics.
+QUALITY_NUMBERS = {
+    "secs": (0, 3600),
+    "rtt_ms": (0, 60000),
+    "jitter_ms": (0, 60000),
+    "loss_in": (0, 100),
+    "loss_out": (0, 100),
+    "conceal": (0, 100),
+    "jb_ms": (0, 60000),
+    "rx_pps": (0, 10000),
+    "tx_pps": (0, 10000),
+    "rx_kbps": (0, 100000),
+    "tx_kbps": (0, 100000),
+    "mic_db": (-127, 0),
+    "spk_db": (-127, 0),
+}
+QUALITY_REQUIRED = {"to", "route", "secs", "rx_pps", "tx_pps", "rx_kbps", "tx_kbps", "muted"}
 SIGNAL_LIMIT = 32768
 SDP_LIMIT = 24000
 TURN_URL = re.compile(
@@ -37,6 +63,62 @@ def validate_sdp(sdp):
         or not any(re.fullmatch(r"a=rtpmap:[0-9]+ opus/48000/2", line) for line in lines)
     ):
         raise ValueError("WebRTC requires fingerprint-authenticated Opus audio")
+
+
+def pseudonym(value):
+    """Short stable tag for logs; not reversible to the identity or call ID."""
+    return hashlib.sha256(value.encode()).hexdigest()[:8]
+
+
+def parse_quality(raw, sender, members):
+    """Validate one rtc-quality ``links`` payload. Raises ValueError when malformed."""
+    if not isinstance(raw, str) or len(raw.encode()) > QUALITY_LIMIT:
+        raise ValueError("Invalid quality size")
+    links = json.loads(raw)
+    if not isinstance(links, list) or not 1 <= len(links) <= 5:
+        raise ValueError("Invalid quality link count")
+    seen = set()
+    for link in links:
+        if not isinstance(link, dict) or not QUALITY_REQUIRED <= set(link) <= (
+            QUALITY_REQUIRED | set(QUALITY_NUMBERS)
+        ):
+            raise ValueError("Invalid quality fields")
+        to = link["to"]
+        if not isinstance(to, str) or to == sender or to not in members or to in seen:
+            raise ValueError("Invalid quality peer")
+        seen.add(to)
+        if not isinstance(link["route"], str) or not QUALITY_ROUTE.fullmatch(link["route"]):
+            raise ValueError("Invalid quality route")
+        if not isinstance(link["muted"], bool):
+            raise ValueError("Invalid quality mute flag")
+        for key, (low, high) in QUALITY_NUMBERS.items():
+            value = link.get(key)
+            if value is None and key not in QUALITY_REQUIRED:
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not low <= value <= high
+            ):
+                raise ValueError(f"Invalid quality value {key}")
+    return links
+
+
+def log_quality(call, sender, links):
+    for link in links:
+        fields = " ".join(
+            f"{key}={link[key]}" for key in QUALITY_NUMBERS if link.get(key) is not None
+        )
+        QUALITY_LOG.info(
+            "quality call=%s from=%s to=%s route=%s muted=%s %s",
+            pseudonym(call),
+            pseudonym(sender),
+            pseudonym(link["to"]),
+            link["route"],
+            int(link["muted"]),
+            fields,
+        )
 
 
 @dataclass(frozen=True)

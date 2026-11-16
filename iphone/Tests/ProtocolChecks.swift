@@ -37,8 +37,53 @@ struct ProtocolChecks {
         }
     }
 
+    static func webRTCQualityChecks() throws {
+        func stats(_ scale: Double, transport: String = "tcp") -> [String: WebRTCStat] {
+            [
+                "in": WebRTCStat(type: "inbound-rtp", numbers: [
+                    "packetsReceived": 450 * scale, "packetsLost": 50 * scale, "bytesReceived": 50_000 * scale,
+                    "concealedSamples": 4_800 * scale, "totalSamplesReceived": 480_000 * scale,
+                    "jitterBufferDelay": 40 * scale, "jitterBufferEmittedCount": 480_000 * scale,
+                    "totalAudioEnergy": 0.01 * scale, "totalSamplesDuration": 10 * scale, "jitter": 0.012
+                ], strings: ["kind": "audio"]),
+                "out": WebRTCStat(type: "outbound-rtp", numbers: ["packetsSent": 500 * scale, "bytesSent": 60_000 * scale],
+                                  strings: ["kind": "audio"]),
+                "rin": WebRTCStat(type: "remote-inbound-rtp", numbers: ["fractionLost": 0.02, "roundTripTime": 0.3],
+                                  strings: ["kind": "audio"]),
+                "mic": WebRTCStat(type: "media-source", numbers: ["totalAudioEnergy": 0, "totalSamplesDuration": 10 * scale],
+                                  strings: ["kind": "audio"]),
+                "t": WebRTCStat(type: "transport", strings: ["selectedCandidatePairId": "p"]),
+                "p": WebRTCStat(type: "candidate-pair", numbers: ["currentRoundTripTime": 0.25, "nominated": 1],
+                                strings: ["localCandidateId": "l", "remoteCandidateId": "r", "state": "succeeded"]),
+                "l": WebRTCStat(type: "local-candidate", strings: [
+                    "candidateType": "relay", "protocol": "udp", "relayProtocol": transport, "address": "192.0.2.1"]),
+                "r": WebRTCStat(type: "remote-candidate", strings: [
+                    "candidateType": "srflx", "protocol": "udp", "address": "198.51.100.2"])
+            ]
+        }
+        let first = WebRTCQualitySample(stats(1), seconds: 100)
+        let second = WebRTCQualitySample(stats(2), seconds: 110)
+        precondition(first.route == "relay/tcp>srflx/udp" && first.roundTrip == 0.25)
+        precondition(WebRTCQualitySample(stats(1, transport: "10.0.0.1"), seconds: 0).route == "relay>srflx/udp")
+        guard let link = WebRTCQualityLink(peer: "peer", from: first, to: second, muted: false) else {
+            preconditionFailure("interval")
+        }
+        precondition(link.secs == 10 && link.rttMs == 250 && link.jitterMs == 12)
+        precondition(link.lossIn == 10 && link.lossOut == 2 && link.conceal == 1)
+        precondition(link.rxPps == 45 && link.txPps == 50 && link.rxKbps == 40 && link.txKbps == 48)
+        precondition(link.jbMs == 0.1 && link.spkDb == -30 && link.micDb == -127)
+        precondition(WebRTCQualityLink(peer: "peer", from: second, to: first, muted: false) == nil)
+        let message = try WebRTCQualityLink.message(call: "call", links: [link])
+        precondition(Set(message.keys) == ["type", "call", "links"] && message["type"] == "rtc-quality")
+        let links = message["links"]!
+        precondition(links.contains("\"rtt_ms\":250") && links.contains("\"route\":\"relay/tcp>srflx/udp\""))
+        precondition(!links.contains("192.0.2.") && !links.contains("198.51.100."))
+        try rejects { _ = try WebRTCQualityLink.message(call: "call", links: []) }
+    }
+
     static func main() throws {
         webRTCSetupChecks()
+        try webRTCQualityChecks()
         let invite = try CallInvitation.generate()
         let parsed = try CallInvitation(invite.text)
         precondition(parsed.text == invite.text)

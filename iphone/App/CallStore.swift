@@ -433,6 +433,10 @@ final class CallStore: ObservableObject {
             self.connected = connected
             self.status = connected ? "Encrypted WebRTC audio (Opus)." : "Connecting WebRTC audio..."
         }
+        rtc.onQuality = { [weak self] links in
+            guard let self, self.generation == id else { return }
+            self.lobby.sendQuality(links)
+        }
         rtc.onProgress = { [weak self] message in
             guard let self, self.generation == id, !self.connected else { return }
             self.status = message

@@ -6,7 +6,15 @@ import time
 
 from .crypto import decode, encode
 from .lobby import Lobby, offer_fields, transcript, verify
-from .webrtc import SIGNAL_LIMIT, signal_fields, validate_sdp
+from .webrtc import (
+    QUALITY_LOG,
+    SIGNAL_LIMIT,
+    log_quality,
+    parse_quality,
+    pseudonym,
+    signal_fields,
+    validate_sdp,
+)
 
 
 class GroupLobby(Lobby):
@@ -30,7 +38,7 @@ class GroupLobby(Lobby):
             **super().challenge(nonce),
             "presence": "1",
             "direct": "1",
-            **({"webrtc": "1"} if self.turn else {}),
+            **({"webrtc": "1", "quality": "1"} if self.turn else {}),
         }
 
     def visible_offer(self, offer, peer):
@@ -183,6 +191,9 @@ class GroupLobby(Lobby):
             return
         if kind == "rtc-signal":
             self.rtc_signal(peer, message)
+            return
+        if kind == "rtc-quality":
+            self.rtc_quality(peer, message)
             return
         if kind == "direct-enable" and set(message) == {"type"}:
             if not peer.direct_calls:
@@ -410,6 +421,26 @@ class GroupLobby(Lobby):
         other = self.peers.get(target)
         if other:
             other.emit(message)
+
+    def rtc_quality(self, peer, message):
+        # Diagnostics only: a stale or malformed report never ends the call.
+        if set(message) != {"type", "call", "links"} or not peer.webrtc:
+            raise ValueError("Invalid quality report")
+        call = message["call"]
+        offer = self.offers.get(call)
+        if (
+            not offer
+            or offer.message.get("media") != "webrtc"
+            or peer.joined != call
+            or peer.identity not in self.members.get(call, {})
+        ):
+            return
+        try:
+            links = parse_quality(message["links"], peer.identity, self.members[call])
+        except (ValueError, TypeError):
+            QUALITY_LOG.warning("quality report rejected from=%s", pseudonym(peer.identity))
+            return
+        log_quality(call, peer.identity, links)
 
     def media(self, peer, raw):
         # destination key || epoch revision || counter/ciphertext/tag.

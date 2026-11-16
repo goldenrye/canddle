@@ -14,6 +14,7 @@ final class GroupStore: ObservableObject {
     var webRTCAvailable = false
     @Published var preferWebRTC = false
     @Published private(set) var webRTCSupported = false
+    private var qualitySupported = false
     @Published private(set) var pendingLegacyCall: LegacyCallRequest?
     private var iceServers: [CallICEServer] = []
     private(set) var webRTCSignals: [WebRTCSignal] = []
@@ -160,6 +161,7 @@ final class GroupStore: ObservableObject {
                     }
                     webRTCSupported = relay.supportsWebRTC && webRTCAvailable
                     if webRTCSupported { try await relay.groupSend(["type": "rtc-enable"]) }
+                    qualitySupported = webRTCSupported && relay.supportsQuality
                     presenceSupported = relay.supportsPresence
                     if presenceSupported {
                         try await relay.groupSend(["type": "presence-subscribe"])
@@ -224,7 +226,7 @@ final class GroupStore: ObservableObject {
         presence = [:]; presenceReady = false; presenceSupported = false; presenceTruncated = false
         autoStart = false
         startTarget = nil; directCallsSupported = false
-        webRTCSupported = false; iceServers = []
+        webRTCSupported = false; qualitySupported = false; iceServers = []
         status = message
         pushAvailable = false
         onDisconnected?()
@@ -524,6 +526,14 @@ final class GroupStore: ObservableObject {
               let signing, let transport else { throw VoiceError.ended }
         let signal = try WebRTCSignal.create(sdp: sdp, kind: kind, to: to, session: session, signing: signing)
         try await transport.groupSend(signal.message)
+    }
+
+    /// Best-effort, redacted media statistics for the relay operator. Older relays
+    /// that do not advertise the capability never receive it.
+    func sendQuality(_ links: [WebRTCQualityLink]) {
+        guard qualitySupported, online, let session = webRTCSession, let transport,
+              let message = try? WebRTCQualityLink.message(call: session.offer.id, links: links) else { return }
+        Task { try? await transport.groupSend(message) }
     }
 
     private func receive(_ message: [String: String]) throws {

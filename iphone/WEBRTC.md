@@ -206,3 +206,34 @@ Before rollout, test on two signed iPhones:
   networks, and deny microphone permission. Confirm teardown and no lingering mic.
 - Compare speech under packet loss/jitter with legacy mode and confirm acceptable
   latency and battery use. No WeChat-equivalent quality claim is made.
+
+## Call Quality Diagnostics
+
+Relays with TURN configured advertise a `quality` capability. Updated iPhones
+then sample WebRTC `getStats()` every 10 seconds and send one `rtc-quality`
+message per interval over the authenticated group socket. Older relays never
+receive it, and the relay drops malformed or stale reports without ending the
+call. Each connected link is logged on the relay:
+
+```text
+INFO quality call=1a2b3c4d from=5e6f7a8b to=9c0d1e2f route=relay/tcp>srflx/udp muted=0 secs=10.0 rtt_ms=248.0 jitter_ms=14.2 loss_in=0.4 loss_out=1.0 conceal=2.1 jb_ms=96.3 rx_pps=50.0 tx_pps=50.0 rx_kbps=36.4 tx_kbps=36.8 mic_db=-38.5 spk_db=-41.2
+```
+
+```sh
+docker compose logs -f relay | grep ' quality '
+```
+
+- `route`: the selected candidate pair as local>remote. For a local `relay`
+  candidate, the transport is the phone-to-TURN leg; `relay/tcp` means TURN over
+  TCP, which turns packet loss into delay.
+- `loss_in`: the share of incoming RTP packets lost in this interval. `loss_out`
+  is the peer's RTCP report of loss on this phone's stream.
+- `conceal`: the share of playout samples synthesized by packet-loss concealment.
+  Above roughly 5%, audio sounds noticeably choppy.
+- `jb_ms`: average jitter-buffer delay. `rtt_ms` comes from ICE consent checks.
+- `tx_pps` near 0 with `muted=0`, or `mic_db` near -127, means this phone is
+  not sending speech.
+
+`from`/`to` are the first 8 hex digits of SHA-256 over the device key. Both
+directions of a pair appear as separate lines. Set `VPCOMM_QUALITY_LOG=0` on the
+relay to stop logging. Reports are not stored apart from container logs.

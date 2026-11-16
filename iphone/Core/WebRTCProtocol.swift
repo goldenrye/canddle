@@ -172,3 +172,159 @@ struct WebRTCSignal {
         }
     }
 }
+
+/// One flattened `RTCStatistics` entry. Only numbers and short strings are kept.
+struct WebRTCStat: Sendable {
+    let type: String
+    var numbers: [String: Double] = [:]
+    var strings: [String: String] = [:]
+}
+
+/// Cumulative counters for one peer link, read from a WebRTC stats report.
+/// Never holds addresses, ports, SDP, ICE credentials or audio content.
+struct WebRTCQualitySample: Sendable, Equatable {
+    var seconds: Double = 0
+    var packetsReceived: Double = 0
+    var packetsLost: Double = 0
+    var packetsSent: Double = 0
+    var bytesReceived: Double = 0
+    var bytesSent: Double = 0
+    var concealedSamples: Double = 0
+    var totalSamplesReceived: Double = 0
+    var jitterBufferDelay: Double = 0
+    var jitterBufferEmitted: Double = 0
+    var micEnergy: Double = 0
+    var micDuration: Double = 0
+    var speakerEnergy: Double = 0
+    var speakerDuration: Double = 0
+    var jitter: Double?
+    var roundTrip: Double?
+    var remoteLoss: Double?
+    var route = "unknown"
+
+    static let candidateTypes: Set<String> = ["host", "srflx", "prflx", "relay"]
+    static let transports: Set<String> = ["udp", "tcp", "tls"]
+
+    init() {}
+
+    init(_ stats: [String: WebRTCStat], seconds: Double) {
+        self.seconds = seconds
+        func audio(_ stat: WebRTCStat) -> Bool { (stat.strings["kind"] ?? stat.strings["mediaType"]) == "audio" }
+        for stat in stats.values {
+            let n = stat.numbers
+            switch stat.type {
+            case "inbound-rtp" where audio(stat):
+                packetsReceived += n["packetsReceived"] ?? 0
+                packetsLost += max(0, n["packetsLost"] ?? 0)
+                bytesReceived += n["bytesReceived"] ?? 0
+                concealedSamples += n["concealedSamples"] ?? 0
+                totalSamplesReceived += n["totalSamplesReceived"] ?? 0
+                jitterBufferDelay += n["jitterBufferDelay"] ?? 0
+                jitterBufferEmitted += n["jitterBufferEmittedCount"] ?? 0
+                speakerEnergy += n["totalAudioEnergy"] ?? 0
+                speakerDuration += n["totalSamplesDuration"] ?? 0
+                if let value = n["jitter"] { jitter = max(jitter ?? 0, value) }
+            case "outbound-rtp" where audio(stat):
+                packetsSent += n["packetsSent"] ?? 0
+                bytesSent += n["bytesSent"] ?? 0
+            case "remote-inbound-rtp" where audio(stat):
+                if let value = n["fractionLost"] { remoteLoss = max(remoteLoss ?? 0, value) }
+                if roundTrip == nil, let value = n["roundTripTime"] { roundTrip = value }
+            case "media-source" where audio(stat):
+                micEnergy += n["totalAudioEnergy"] ?? 0
+                micDuration += n["totalSamplesDuration"] ?? 0
+            default: break
+            }
+        }
+        let pairs = stats.values.filter { $0.type == "candidate-pair" }
+        let selectedID = stats.values.first { $0.type == "transport" }?.strings["selectedCandidatePairId"]
+        let pair = selectedID.flatMap { stats[$0] }
+            ?? pairs.first { $0.numbers["nominated"] == 1 && $0.strings["state"] == "succeeded" }
+        if let pair {
+            if let value = pair.numbers["currentRoundTripTime"] { roundTrip = value }
+            func describe(_ id: String?) -> String {
+                guard let candidate = id.flatMap({ stats[$0] }),
+                      let type = candidate.strings["candidateType"], Self.candidateTypes.contains(type) else {
+                    return "unknown"
+                }
+                // For a local relay candidate, relayProtocol is the phone-to-TURN leg.
+                let transport = candidate.strings["relayProtocol"] ?? candidate.strings["protocol"] ?? ""
+                return Self.transports.contains(transport) ? "\(type)/\(transport)" : type
+            }
+            route = "\(describe(pair.strings["localCandidateId"]))>\(describe(pair.strings["remoteCandidateId"]))"
+        }
+    }
+}
+
+/// Redacted interval summary of one link, sent to the relay for operator diagnosis.
+struct WebRTCQualityLink: Codable, Equatable {
+    var to: String
+    var route: String
+    var secs: Double
+    var rttMs: Double?
+    var jitterMs: Double?
+    var lossIn: Double?
+    var lossOut: Double?
+    var conceal: Double?
+    var jbMs: Double?
+    var rxPps: Double
+    var txPps: Double
+    var rxKbps: Double
+    var txKbps: Double
+    var micDb: Double?
+    var spkDb: Double?
+    var muted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case to, route, secs, muted
+        case rttMs = "rtt_ms", jitterMs = "jitter_ms", lossIn = "loss_in", lossOut = "loss_out"
+        case conceal, jbMs = "jb_ms", rxPps = "rx_pps", txPps = "tx_pps"
+        case rxKbps = "rx_kbps", txKbps = "tx_kbps", micDb = "mic_db", spkDb = "spk_db"
+    }
+
+    static let interval: UInt64 = 10
+
+    static func round(_ value: Double?) -> Double? {
+        guard let value, value.isFinite else { return nil }
+        return (value * 10).rounded() / 10
+    }
+
+    /// RMS level in dBFS from cumulative audio energy, or nil when no audio was measured.
+    static func level(_ energy: Double, _ duration: Double) -> Double? {
+        guard duration > 0.5, energy >= 0 else { return nil }
+        return round(max(-127, 10 * log10(max(energy / duration, 1e-13))))
+    }
+
+    init?(peer: String, from old: WebRTCQualitySample, to new: WebRTCQualitySample, muted: Bool) {
+        let span = new.seconds - old.seconds
+        guard span >= 1, span <= 3600 else { return nil }
+        func delta(_ path: KeyPath<WebRTCQualitySample, Double>) -> Double { max(0, new[keyPath: path] - old[keyPath: path]) }
+        let received = delta(\.packetsReceived), lost = delta(\.packetsLost)
+        let samples = delta(\.totalSamplesReceived), emitted = delta(\.jitterBufferEmitted)
+        to = peer
+        route = new.route
+        secs = Self.round(span)!
+        rttMs = Self.round(new.roundTrip.map { $0 * 1000 })
+        jitterMs = Self.round(new.jitter.map { $0 * 1000 })
+        lossIn = received + lost > 0 ? Self.round(100 * lost / (received + lost)) : nil
+        lossOut = Self.round(new.remoteLoss.map { min(100, $0 * 100) })
+        conceal = samples > 0 ? Self.round(min(100, 100 * delta(\.concealedSamples) / samples)) : nil
+        jbMs = emitted > 0 ? Self.round(1000 * delta(\.jitterBufferDelay) / emitted) : nil
+        rxPps = Self.round(received / span)!
+        txPps = Self.round(delta(\.packetsSent) / span)!
+        rxKbps = Self.round(delta(\.bytesReceived) * 8 / span / 1000)!
+        txKbps = Self.round(delta(\.bytesSent) * 8 / span / 1000)!
+        micDb = Self.level(delta(\.micEnergy), delta(\.micDuration))
+        spkDb = Self.level(delta(\.speakerEnergy), delta(\.speakerDuration))
+        self.muted = muted
+    }
+
+    static func message(call: String, links: [Self]) throws -> [String: String] {
+        guard (1...5).contains(links.count) else { throw VoiceError.packet }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let text = String(decoding: try encoder.encode(links), as: UTF8.self)
+        guard text.utf8.count <= 4096 else { throw VoiceError.packet }
+        return ["type": "rtc-quality", "call": call, "links": text]
+    }
+}
