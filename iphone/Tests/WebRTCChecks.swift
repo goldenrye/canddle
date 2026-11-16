@@ -14,6 +14,44 @@ struct WebRTCChecks {
         }
     }
 
+    /// Regression: the answering phone negotiated recvonly and sent no audio.
+    /// Only SDP is created. Neither side applies the answer, so no send stream
+    /// starts and the microphone is never opened.
+    @MainActor static func answererSends(factory: RTCPeerConnectionFactory, config: RTCConfiguration,
+                                         constraints: RTCMediaConstraints) async throws {
+        let opus = factory.rtpSenderCapabilities(forKind: "audio").codecs.filter { $0.name.lowercased() == "opus" }
+        func answer(legacyAnswerer: Bool) async throws -> (sdp: String, transceivers: Int) {
+            let a = factory.peerConnection(with: config, constraints: constraints, delegate: nil)!
+            let b = factory.peerConnection(with: config, constraints: constraints, delegate: nil)!
+            defer { a.close(); b.close() }
+            _ = try a.attachAudio(factory.audioTrack(withTrackId: "offerer"), codecs: opus)
+            let track = factory.audioTrack(withTrackId: "answerer")
+            if legacyAnswerer {
+                // The pre-fix app path.
+                try b.addTransceiver(with: track)!.setCodecPreferences(opus, error: ())
+            } else {
+                _ = try b.attachAudio(track, codecs: opus)
+            }
+            let offer = try await a.offer(for: constraints)
+            try await b.setRemoteDescription(offer)
+            return (try await b.answer(for: constraints).sdp, b.transceivers.count)
+        }
+        func direction(_ sdp: String) -> String? {
+            sdp.components(separatedBy: .newlines).first {
+                ["a=sendrecv", "a=sendonly", "a=recvonly", "a=inactive"].contains($0.trimmingCharacters(in: .whitespaces))
+            }?.trimmingCharacters(in: .whitespaces)
+        }
+        let fixed = try await answer(legacyAnswerer: false)
+        precondition(direction(fixed.sdp) == "a=sendrecv", "answerer must send: \(direction(fixed.sdp) ?? "none")")
+        precondition(fixed.transceivers == 1, "offer must bind to the answerer's own track")
+        precondition(fixed.sdp.contains("opus/48000/2"))
+        // Shows this check catches the bug: with addTransceiver the answer is recvonly.
+        let legacy = try await answer(legacyAnswerer: true)
+        precondition(direction(legacy.sdp) == "a=recvonly" && legacy.transceivers == 2,
+                     "SDK no longer reproduces the addTransceiver answerer bug; review this check")
+        print("PASS answerer-sends: addTrack answer is sendrecv; addTransceiver answer was recvonly")
+    }
+
     @MainActor static func main() async throws {
         RTCInitializeSSL()
         let factory = RTCPeerConnectionFactory(encoderFactory: nil, decoderFactory: nil)
@@ -27,6 +65,10 @@ struct WebRTCChecks {
             || CommandLine.arguments.contains("--trickle-stalled-turn")
         let stalledTURN = CommandLine.arguments.contains("--stalled-turn")
             || CommandLine.arguments.contains("--trickle-stalled-turn")
+        if CommandLine.arguments.contains("--answerer-sends") {
+            try await answererSends(factory: factory, config: config, constraints: constraints)
+            return
+        }
         var blackhole: Int32 = -1
         defer { if blackhole >= 0 { Darwin.close(blackhole) } }
         if stalledTURN {

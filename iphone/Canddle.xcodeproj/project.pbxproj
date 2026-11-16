@@ -10,6 +10,7 @@
                 F30000000000000000000001 /* CallQualityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000002; };
                 F20000000000000000000008 /* WebRTC-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000009; };
                 F20000000000000000000004 /* WebRTCAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000006; };
+                F40000000000000000000001 /* WebRTCTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40000000000000000000002; };
                 F20000000000000000000005 /* WebRTCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007; };
                 F20000000000000000000001 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = F20000000000000000000002 /* WebRTC */; };
 		A00000000000000000000040 /* CanddleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000030 /* CanddleApp.swift */; };
@@ -42,6 +43,7 @@
                 F30000000000000000000002 /* CallQualityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallQualityStore.swift; sourceTree = "<group>"; };
                 F20000000000000000000009 /* WebRTC-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "WebRTC-LICENSE.txt"; sourceTree = "<group>"; };
                 F20000000000000000000006 /* WebRTCAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCAudio.swift; sourceTree = "<group>"; };
+                F40000000000000000000002 /* WebRTCTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCTrack.swift; sourceTree = "<group>"; };
                 F20000000000000000000007 /* WebRTCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCProtocol.swift; sourceTree = "<group>"; };
 		A00000000000000000000006 /* Canddle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Canddle.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000030 /* CanddleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanddleApp.swift; sourceTree = "<group>"; };
@@ -98,6 +100,7 @@
 			children = (
                                 F20000000000000000000009 /* WebRTC-LICENSE.txt */,
                                 F20000000000000000000006 /* WebRTCAudio.swift */,
+                                F40000000000000000000002 /* WebRTCTrack.swift */,
                                 F30000000000000000000002 /* CallQualityStore.swift */,
 				F10000000000000000000002 /* SystemCalls.swift */,
 				F00000000000000000000004 /* GroupStore.swift */,
@@ -217,6 +220,7 @@
 			buildActionMask = 2147483647;
 			files = (
                                 F20000000000000000000004 /* WebRTCAudio.swift in Sources */,
+                                F40000000000000000000001 /* WebRTCTrack.swift in Sources */,
                                 F30000000000000000000001 /* CallQualityStore.swift in Sources */,
                                 F20000000000000000000005 /* WebRTCProtocol.swift in Sources */,
 				F10000000000000000000001 /* SystemCalls.swift in Sources */,

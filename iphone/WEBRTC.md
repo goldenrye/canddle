@@ -205,9 +205,17 @@ WEBRTC_FRAMEWORK=/path/to/WebRTC.xcframework
 xcrun swiftc -parse-as-library \
   -F "$WEBRTC_FRAMEWORK/macos-x86_64_arm64" -framework WebRTC \
   -Xlinker -rpath -Xlinker "$WEBRTC_FRAMEWORK/macos-x86_64_arm64" \
-  iphone/Core/*.swift iphone/Tests/WebRTCChecks.swift -o /tmp/canddle-webrtc-checks
+  iphone/Core/*.swift iphone/App/WebRTCTrack.swift iphone/Tests/WebRTCChecks.swift \
+  -o /tmp/canddle-webrtc-checks
 /tmp/canddle-webrtc-checks
+/tmp/canddle-webrtc-checks --answerer-sends
 ```
+
+`--answerer-sends` checks that the answering phone's SDP is `sendrecv`. Each
+phone attaches its microphone with `addTrack` (`App/WebRTCTrack.swift`). A
+transceiver from `addTransceiver` is not reused for a remote offer, so the
+answer used to be `recvonly` and that phone sent no audio. The check creates
+SDP only and never opens a microphone.
 
 This probe uses receive-only transceivers: it does not record or play sound.
 Successful negotiation does not establish physical audio quality.

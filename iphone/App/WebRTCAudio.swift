@@ -164,14 +164,11 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             guard let pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
                 throw VoiceError.packet
             }
-            guard let transceiver = pc.addTransceiver(with: track) else {
-                pc.close(); throw VoiceError.packet
-            }
             let opus = Self.factory.rtpSenderCapabilities(forKind: "audio").codecs.filter {
                 $0.name.lowercased() == "opus"
             }
-            guard !opus.isEmpty else { pc.close(); throw VoiceError.packet }
-            do { try transceiver.setCodecPreferences(opus, error: ()) }
+            // addTrack (inside attachAudio) lets the answerer reuse this sender.
+            do { _ = try pc.attachAudio(track, codecs: opus) }
             catch { pc.close(); throw error }
             let link = Link(peer: member.id, connection: pc)
             links[member.id] = link
