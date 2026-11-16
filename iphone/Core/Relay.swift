@@ -160,6 +160,7 @@ final class Relay {
     private(set) var supportsWebRTC = false
     private(set) var supportsTrickle = false
     private(set) var supportsQuality = false
+    private(set) var supportsQualityPath = false
     private let session: URLSession
     private let socket: URLSessionWebSocketTask
     private var keys: CallKeys?
@@ -252,6 +253,7 @@ final class Relay {
         supportsWebRTC = group && challenge["webrtc"] == "1"
         supportsTrickle = supportsWebRTC && challenge["trickle"] == "1"
         supportsQuality = supportsWebRTC && challenge["quality"] == "1"
+        supportsQualityPath = supportsQuality && challenge["quality_path"] == "1"
         let publicKey = VoiceProtocol.base64(identity.publicKey.rawRepresentation)
         try await lobbySend([
             "type": "register", "identity": publicKey, "name": name,

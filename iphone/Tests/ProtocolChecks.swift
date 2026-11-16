@@ -124,7 +124,16 @@ struct ProtocolChecks {
                 "l": WebRTCStat(type: "local-candidate", strings: [
                     "candidateType": "relay", "protocol": "udp", "relayProtocol": transport, "address": "192.0.2.1"]),
                 "r": WebRTCStat(type: "remote-candidate", strings: [
-                    "candidateType": "srflx", "protocol": "udp", "address": "198.51.100.2"])
+                    "candidateType": "srflx", "protocol": "udp", "address": "198.51.100.2"]),
+                // A direct IPv6 host pair whose checks failed, e.g. a blocking firewall.
+                "lh": WebRTCStat(type: "local-candidate", strings: [
+                    "candidateType": "host", "protocol": "udp", "address": "2001:db8::1"]),
+                "rh": WebRTCStat(type: "remote-candidate", strings: [
+                    "candidateType": "host", "protocol": "udp", "address": "2001:db8::2"]),
+                "p2": WebRTCStat(type: "candidate-pair", strings: [
+                    "localCandidateId": "lh", "remoteCandidateId": "rh", "state": "failed"]),
+                "p3": WebRTCStat(type: "candidate-pair", strings: [
+                    "localCandidateId": "lh", "remoteCandidateId": "r", "state": "in-progress"])
             ]
         }
         let first = WebRTCQualitySample(stats(1), seconds: 100)
@@ -139,11 +148,34 @@ struct ProtocolChecks {
         precondition(link.rxPps == 45 && link.txPps == 50 && link.rxKbps == 40 && link.txKbps == 48)
         precondition(link.jbMs == 0.1 && link.spkDb == -30 && link.micDb == -127)
         precondition(WebRTCQualityLink(peer: "peer", from: second, to: first, muted: false) == nil)
+        let path = first.path
+        precondition(path.localHost == 1 && path.localSrflx == 0 && path.localRelay == 1 && path.localIPv6 == 1)
+        precondition(path.remoteHost == 1 && path.remoteSrflx == 1 && path.remoteRelay == 0 && path.remoteIPv6 == 1)
+        precondition(path.directSucceeded == 0 && path.directFailed == 1 && path.routeIPv6 == false)
+        precondition(link.lHost == 1 && link.lRelay == 1 && link.lV6 == 1 && link.rSrflx == 1)
+        precondition(link.dOk == 0 && link.dFail == 1 && link.v6 == 0 && link.lan == nil)
+        precondition(link.relayed == true)
+        for (route, relayed) in [("host/udp>srflx/udp", false as Bool?), ("prflx/udp>host/udp", false),
+                                 ("srflx/udp>relay/udp", true), ("unknown>host/udp", nil), ("", nil)] {
+            var probe = link
+            probe.route = route
+            precondition(probe.relayed == relayed)
+        }
         let message = try WebRTCQualityLink.message(call: "call", links: [link])
         precondition(Set(message.keys) == ["type", "call", "links"] && message["type"] == "rtc-quality")
         let links = message["links"]!
         precondition(links.contains("\"rtt_ms\":250") && links.contains("\"route\":\"relay/tcp>srflx/udp\""))
         precondition(!links.contains("192.0.2.") && !links.contains("198.51.100."))
+        precondition(links.contains("\"d_fail\":1") && links.contains("\"l_v6\":1") && links.contains("\"v6\":0"))
+        precondition(!links.contains("2001:db8") && !links.contains("\"lan\""))
+        var lan = link
+        lan.lan = 0
+        precondition(try WebRTCQualityLink.message(call: "call", links: [lan])["links"]!.contains("\"lan\":0"))
+        let legacy = try WebRTCQualityLink.message(call: "call", links: [lan.withoutPath()])["links"]!
+        for key in ["l_host", "r_srflx", "d_ok", "d_fail", "\"v6\"", "\"lan\""] {
+            precondition(!legacy.contains(key), "old relays reject \(key)")
+        }
+        precondition(legacy.contains("\"rtt_ms\":250"))
         try rejects { _ = try WebRTCQualityLink.message(call: "call", links: []) }
         qualityIndicatorChecks(link)
     }

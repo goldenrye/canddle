@@ -92,6 +92,7 @@ final class CallStore: ObservableObject {
     @Published private(set) var muted = false
     @Published private(set) var groupAudio = false
     let mediaQuality = CallQualityStore()
+    let localNetwork = LocalNetworkAccess()
     @Published private(set) var verification = ""
     @Published private(set) var rootFingerprint: String?
     private var root: Data?
@@ -109,6 +110,8 @@ final class CallStore: ObservableObject {
 
     init() {
         WebRTCAudio.prepare()
+        // Ask before the first call: a prompt shown mid-call blocks that call's direct path.
+        localNetwork.start()
         useWebRTCAudio = UserDefaults.standard.object(forKey: "useWebRTCAudio") as? Bool ?? true
         lobby.webRTCAvailable = true
         lobby.preferWebRTC = useWebRTCAudio
@@ -453,6 +456,8 @@ final class CallStore: ObservableObject {
         }
         rtc.onQuality = { [weak self] links in
             guard let self, self.generation == id else { return }
+            let lan = self.localNetwork.reportValue
+            let links = links.map { var link = $0; link.lan = lan; return link }
             self.mediaQuality.receive(links)
             self.lobby.sendQuality(links)
         }

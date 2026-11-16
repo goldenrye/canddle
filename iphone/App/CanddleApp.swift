@@ -64,6 +64,7 @@ struct CallView: View {
                             if call.busy && !call.pairing {
                                 CallMediaIndicator(quality: call.mediaQuality, connected: call.connected)
                                     .accessibilityHint("Group quality reflects the worst measured link. Expand a participant for details.")
+                                LocalNetworkHint(access: call.localNetwork)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

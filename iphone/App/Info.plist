@@ -24,8 +24,12 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan a one-time QR code from your server to pair this iPhone securely.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_canddle._udp</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to your self-hosted relay when it is on the local network.</string>
+	<string>Connect calls directly to phones on the same Wi-Fi for lower delay, and reach your relay when it is on your network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Use your microphone for encrypted audio calls with your chosen participant.</string>
 	<key>UIApplicationSceneManifest</key>

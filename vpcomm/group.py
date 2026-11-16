@@ -43,7 +43,11 @@ class GroupLobby(Lobby):
             **super().challenge(nonce),
             "presence": "1",
             "direct": "1",
-            **({"webrtc": "1", "quality": "1", "trickle": "1"} if self.turn else {}),
+            **(
+                {"webrtc": "1", "quality": "1", "quality_path": "1", "trickle": "1"}
+                if self.turn
+                else {}
+            ),
         }
 
     def visible_offer(self, offer, peer):

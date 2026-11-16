@@ -267,6 +267,49 @@ struct WebRTCStat: Sendable {
     var strings: [String: String] = [:]
 }
 
+/// Why a link is direct or relayed: counts of ICE candidates and direct
+/// (non-TURN) candidate pairs. Counts only; never addresses or ports.
+struct WebRTCPathSummary: Sendable, Equatable {
+    var localHost = 0, localSrflx = 0, localRelay = 0, localIPv6 = 0
+    var remoteHost = 0, remoteSrflx = 0, remotePrflx = 0, remoteRelay = 0, remoteIPv6 = 0
+    var directSucceeded = 0, directFailed = 0
+    var routeIPv6: Bool?
+
+    init() {}
+
+    init(_ stats: [String: WebRTCStat], selected: WebRTCStat?) {
+        func ipv6(_ stat: WebRTCStat) -> Bool { (stat.strings["address"] ?? stat.strings["ip"])?.contains(":") == true }
+        for stat in stats.values {
+            let type = stat.strings["candidateType"]
+            switch stat.type {
+            case "local-candidate":
+                if type == "host" { localHost += 1 }
+                if type == "srflx" { localSrflx += 1 }
+                if type == "relay" { localRelay += 1 }
+                if ipv6(stat) { localIPv6 += 1 }
+            case "remote-candidate":
+                if type == "host" { remoteHost += 1 }
+                if type == "srflx" { remoteSrflx += 1 }
+                if type == "prflx" { remotePrflx += 1 }
+                if type == "relay" { remoteRelay += 1 }
+                if ipv6(stat) { remoteIPv6 += 1 }
+            case "candidate-pair":
+                let ends = [stat.strings["localCandidateId"], stat.strings["remoteCandidateId"]]
+                    .map { $0.flatMap { stats[$0] } }
+                let direct = ends.allSatisfy { end in
+                    guard let type = end?.strings["candidateType"] else { return false }
+                    return type != "relay"
+                }
+                guard direct else { break }
+                if stat.strings["state"] == "succeeded" { directSucceeded += 1 }
+                if stat.strings["state"] == "failed" { directFailed += 1 }
+            default: break
+            }
+        }
+        if let local = selected?.strings["localCandidateId"].flatMap({ stats[$0] }) { routeIPv6 = ipv6(local) }
+    }
+}
+
 /// Cumulative counters for one peer link, read from a WebRTC stats report.
 /// Never holds addresses, ports, SDP, ICE credentials or audio content.
 struct WebRTCQualitySample: Sendable, Equatable {
@@ -288,6 +331,7 @@ struct WebRTCQualitySample: Sendable, Equatable {
     var roundTrip: Double?
     var remoteLoss: Double?
     var route = "unknown"
+    var path = WebRTCPathSummary()
 
     static let candidateTypes: Set<String> = ["host", "srflx", "prflx", "relay"]
     static let transports: Set<String> = ["udp", "tcp", "tls"]
@@ -327,6 +371,7 @@ struct WebRTCQualitySample: Sendable, Equatable {
         let selectedID = stats.values.first { $0.type == "transport" }?.strings["selectedCandidatePairId"]
         let pair = selectedID.flatMap { stats[$0] }
             ?? pairs.first { $0.numbers["nominated"] == 1 && $0.strings["state"] == "succeeded" }
+        path = WebRTCPathSummary(stats, selected: pair)
         if let pair {
             if let value = pair.numbers["currentRoundTripTime"] { roundTrip = value }
             func describe(_ id: String?) -> String {
@@ -361,12 +406,39 @@ struct WebRTCQualityLink: Codable, Equatable {
     var micDb: Double?
     var spkDb: Double?
     var muted: Bool
+    // Path diagnostics; sent only to relays advertising "quality_path".
+    var lHost: Int?, lSrflx: Int?, lRelay: Int?, lV6: Int?
+    var rHost: Int?, rSrflx: Int?, rPrflx: Int?, rRelay: Int?, rV6: Int?
+    var dOk: Int?, dFail: Int?
+    var v6: Int?
+    /// iOS Local Network access: 1 on, 0 off, nil unknown.
+    var lan: Int?
 
     enum CodingKeys: String, CodingKey {
         case to, route, secs, muted
         case rttMs = "rtt_ms", jitterMs = "jitter_ms", lossIn = "loss_in", lossOut = "loss_out"
         case conceal, jbMs = "jb_ms", rxPps = "rx_pps", txPps = "tx_pps"
         case rxKbps = "rx_kbps", txKbps = "tx_kbps", micDb = "mic_db", spkDb = "spk_db"
+        case lHost = "l_host", lSrflx = "l_srflx", lRelay = "l_relay", lV6 = "l_v6"
+        case rHost = "r_host", rSrflx = "r_srflx", rPrflx = "r_prflx", rRelay = "r_relay", rV6 = "r_v6"
+        case dOk = "d_ok", dFail = "d_fail", v6, lan
+    }
+
+    /// Whether the selected route goes through TURN at either end.
+    var relayed: Bool? {
+        let ends = route.components(separatedBy: ">").map { $0.components(separatedBy: "/")[0] }
+        guard ends.count == 2 else { return nil }
+        if ends.contains("relay") { return true }
+        return ends.allSatisfy { ["host", "srflx", "prflx"].contains($0) } ? false : nil
+    }
+
+    /// The report without path diagnostics, for relays that would reject them.
+    func withoutPath() -> Self {
+        var copy = self
+        copy.lHost = nil; copy.lSrflx = nil; copy.lRelay = nil; copy.lV6 = nil
+        copy.rHost = nil; copy.rSrflx = nil; copy.rPrflx = nil; copy.rRelay = nil; copy.rV6 = nil
+        copy.dOk = nil; copy.dFail = nil; copy.v6 = nil; copy.lan = nil
+        return copy
     }
 
     static let interval: UInt64 = 10
@@ -404,6 +476,12 @@ struct WebRTCQualityLink: Codable, Equatable {
         micDb = Self.level(delta(\.micEnergy), delta(\.micDuration))
         spkDb = Self.level(delta(\.speakerEnergy), delta(\.speakerDuration))
         self.muted = muted
+        let path = new.path
+        lHost = path.localHost; lSrflx = path.localSrflx; lRelay = path.localRelay; lV6 = path.localIPv6
+        rHost = path.remoteHost; rSrflx = path.remoteSrflx; rPrflx = path.remotePrflx
+        rRelay = path.remoteRelay; rV6 = path.remoteIPv6
+        dOk = path.directSucceeded; dFail = path.directFailed
+        v6 = path.routeIPv6.map { $0 ? 1 : 0 }
     }
 
     static func message(call: String, links: [Self]) throws -> [String: String] {

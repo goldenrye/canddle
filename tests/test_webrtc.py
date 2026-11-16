@@ -342,6 +342,19 @@ async def test_quality_report_logged_without_identifiers(caplog):
         assert secret not in text
 
 
+def test_quality_path_diagnostics_logged():
+    path = {"l_host": 2, "l_srflx": 1, "l_relay": 1, "l_v6": 1, "r_host": 2, "r_srflx": 1,
+            "r_prflx": 0, "r_relay": 1, "r_v6": 0, "d_ok": 0, "d_fail": 3, "v6": 0, "lan": 0}
+    raw = json.dumps([quality_link("other", **path)])
+    links = parse_quality(raw, "me", {"me": {}, "other": {}})
+    assert links[0]["d_fail"] == 3 and links[0]["lan"] == 0
+
+
+def test_relay_advertises_quality_path():
+    assert Relay(TOKEN, turn=TURN).group.challenge("nonce")["quality_path"] == "1"
+    assert "quality_path" not in Relay(TOKEN).group.challenge("nonce")
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -354,6 +367,9 @@ async def test_quality_report_logged_without_identifiers(caplog):
         lambda me, other: [quality_link(other, rtt_ms=True)],
         lambda me, other: [quality_link(other, muted="no")],
         lambda me, other: [quality_link(other, extra=1)],
+        lambda me, other: [quality_link(other, v6=2)],
+        lambda me, other: [quality_link(other, lan=True)],
+        lambda me, other: [quality_link(other, l_host=-1)],
         lambda me, other: [{k: v for k, v in quality_link(other).items() if k != "route"}],
     ],
 )

@@ -318,3 +318,47 @@ docker compose logs -f relay | grep ' quality '
 directions of a pair appear as separate lines. Set `VPCOMM_QUALITY_LOG=0` on the
 relay to stop logging. The app keeps only the latest in-memory readings for
 the call; reports are not persisted on the phone.
+
+## Direct Paths
+
+ICE always tries direct paths first and uses TURN only when every direct
+check fails. A route with `relay` at either end goes through TURN; anything
+else is direct. The call details screen shows this as **Path**.
+
+- **Same Wi-Fi:** phones connect over their local addresses (`host>host`), but
+  only with iOS **Local Network** access. Without it, iOS silently drops those
+  packets. The app asks at launch (a Bonjour browse for `_canddle._udp`,
+  listening only) and shows a hint during calls while access is off. Wi-Fi
+  "client isolation" on guest or mesh networks also blocks this path.
+- **Different networks:** hole punching through each router (`srflx>srflx`)
+  usually works with home routers. It fails when a router gives each
+  destination a different public port, or behind some carrier-grade NAT.
+- **IPv6:** WebRTC gathers IPv6 addresses by default, and nothing in the app
+  or relay filters them. When both phones have global IPv6, they can usually
+  connect directly with no address translation; a stateful firewall may still
+  block it. The TURN server does not need IPv6 for this.
+
+Relays that advertise `quality_path` also receive path counts (never
+addresses) in each quality report. Older relays never receive them.
+
+| Field | Meaning |
+|---|---|
+| `l_host`, `l_srflx`, `l_relay` | This phone's candidates: local, public (from TURN/STUN), TURN relay |
+| `r_host`, `r_srflx`, `r_prflx`, `r_relay` | The other phone's candidates; `prflx` was learned from its checks |
+| `l_v6`, `r_v6` | How many of those are IPv6 |
+| `d_ok`, `d_fail` | Direct (non-TURN) candidate pairs whose checks succeeded / failed |
+| `v6` | 1 when the selected route is IPv6 |
+| `lan` | iOS Local Network access: 1 on, 0 off; omitted when unknown |
+
+Reading them for a relayed call:
+
+- `lan=0`: Local Network access is off on that phone. Turn it on in Settings.
+- `r_host` or `l_host` is 0: no local addresses were exchanged at all.
+- `l_srflx=0`: the phone found no public address, so TURN UDP was unreachable
+  and hole punching was impossible.
+- `d_fail` > 0 and `d_ok=0`: direct paths were tried and blocked, by a router,
+  firewall or Wi-Fi isolation.
+- `l_v6=0` or `r_v6=0`: at least one phone has no IPv6, so there is no IPv6 path.
+
+Counts come from the current stats report, so long-finished pairs may have
+been pruned.

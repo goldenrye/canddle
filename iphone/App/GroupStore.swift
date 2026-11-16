@@ -15,6 +15,7 @@ final class GroupStore: ObservableObject {
     @Published var preferWebRTC = false
     @Published private(set) var webRTCSupported = false
     private var qualitySupported = false
+    private var qualityPathSupported = false
     private var trickleSupported = false
     @Published private(set) var pendingLegacyCall: LegacyCallRequest?
     private var iceServers: [CallICEServer] = []
@@ -171,6 +172,7 @@ final class GroupStore: ObservableObject {
                     trickleSupported = webRTCSupported && relay.supportsTrickle
                     if webRTCSupported { try await relay.groupSend(["type": "rtc-enable"]) }
                     qualitySupported = webRTCSupported && relay.supportsQuality
+                    qualityPathSupported = qualitySupported && relay.supportsQualityPath
                     presenceSupported = relay.supportsPresence
                     if presenceSupported {
                         try await relay.groupSend(["type": "presence-subscribe"])
@@ -235,7 +237,7 @@ final class GroupStore: ObservableObject {
         presence = [:]; presenceReady = false; presenceSupported = false; presenceTruncated = false
         autoStart = false
         startTarget = nil; directCallsSupported = false
-        webRTCSupported = false; qualitySupported = false; iceServers = []
+        webRTCSupported = false; qualitySupported = false; qualityPathSupported = false; iceServers = []
         trickleSupported = false
         status = message
         pushAvailable = false
@@ -561,6 +563,8 @@ final class GroupStore: ObservableObject {
     /// Best-effort, redacted media statistics for the relay operator. Older relays
     /// that do not advertise the capability never receive it.
     func sendQuality(_ links: [WebRTCQualityLink]) {
+        // Older relays reject unknown fields, so path diagnostics need the capability.
+        let links = qualityPathSupported ? links : links.map { $0.withoutPath() }
         guard qualitySupported, online, let session = webRTCSession, let transport,
               let message = try? WebRTCQualityLink.message(call: session.offer.id, links: links) else { return }
         Task { try? await transport.groupSend(message) }

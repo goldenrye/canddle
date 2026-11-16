@@ -32,6 +32,23 @@ QUALITY_NUMBERS = {
     "tx_kbps": (0, 100000),
     "mic_db": (-127, 0),
     "spk_db": (-127, 0),
+    # Path diagnostics (relay capability "quality_path"): counts only, never
+    # addresses. Local/remote candidates by type, IPv6 candidates, and
+    # direct (non-TURN) candidate pairs that succeeded or failed their checks.
+    "l_host": (0, 1000),
+    "l_srflx": (0, 1000),
+    "l_relay": (0, 1000),
+    "l_v6": (0, 1000),
+    "r_host": (0, 1000),
+    "r_srflx": (0, 1000),
+    "r_prflx": (0, 1000),
+    "r_relay": (0, 1000),
+    "r_v6": (0, 1000),
+    "d_ok": (0, 1000),
+    "d_fail": (0, 1000),
+    # 1 when the selected route is IPv6; Local Network access 1 on, 0 off.
+    "v6": (0, 1),
+    "lan": (0, 1),
 }
 QUALITY_REQUIRED = {"to", "route", "secs", "rx_pps", "tx_pps", "rx_kbps", "tx_kbps", "muted"}
 SIGNAL_LIMIT = 32768

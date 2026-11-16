@@ -354,10 +354,41 @@ struct CallMediaIndicator: View {
             guard let number, number.isFinite else { return "Unavailable" }
             return String(format: "%.1f", number) + unit
         }
-        return "Round-trip: \(value(link.rttMs, unit: " ms"))\n"
+        return "Path: \(path(link))\n"
+            + "Round-trip: \(value(link.rttMs, unit: " ms"))\n"
             + "Jitter: \(value(link.jitterMs, unit: " ms"))\n"
             + "Packet loss (in / out): \(value(link.lossIn, unit: "%")) / \(value(link.lossOut, unit: "%"))\n"
             + "Concealed audio: \(value(link.conceal, unit: "%"))\n"
             + "Jitter buffer: \(value(link.jbMs, unit: " ms"))"
+    }
+
+    private func path(_ link: WebRTCQualityLink) -> String {
+        let family = link.v6 == 1 ? " over IPv6" : ""
+        switch link.relayed {
+        case false?: return "Direct" + family
+        case true?: return "Relayed through your TURN server" + family
+        case nil: return "Unknown"
+        }
+    }
+}
+
+/// Shown during a call while iOS Local Network access is off. Calls between
+/// phones on the same Wi-Fi then cannot connect directly.
+struct LocalNetworkHint: View {
+    @ObservedObject var access: LocalNetworkAccess
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        if access.state == .denied {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Local Network is off for canddle, so calls with phones on the same Wi-Fi go through your relay and have more delay.")
+                Button("Turn On in Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("localNetworkHint")
+        }
     }
 }
