@@ -91,6 +91,10 @@ final class CallStore: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var muted = false
     @Published private(set) var groupAudio = false
+    @Published private(set) var mediaIsWebRTC = false
+    @Published private(set) var qualityReadings: [String: CallQualityReading] = [:]
+    @Published private(set) var qualityPeers: Set<String> = []
+    @Published private(set) var connectedMediaPeers: Set<String> = []
     @Published private(set) var verification = ""
     @Published private(set) var rootFingerprint: String?
     private var root: Data?
@@ -119,7 +123,13 @@ final class CallStore: ObservableObject {
         lobby.onAudioReady = { [weak self] in self?.systemCalls.mediaReady() }
         lobby.onWebRTCSessionChanged = { [weak self] session in
             guard let self, let audio = self.rtcAudio else { return }
-            guard let session else { audio.stop(); self.rtcAudio = nil; return }
+            guard let session else {
+                audio.stop()
+                self.rtcAudio = nil
+                self.qualityPeers = []
+                return
+            }
+            self.qualityPeers = Set(session.roster.members.map(\.id)).subtracting([session.identity])
             do { try audio.update(session) }
             catch { self.failWebRTC("Could not update WebRTC membership securely.") }
         }
@@ -421,6 +431,14 @@ final class CallStore: ObservableObject {
     private func startWebRTC(_ session: WebRTCSession, id: UUID) throws {
         let rtc = WebRTCAudio()
         rtcAudio = rtc
+        mediaIsWebRTC = true
+        qualityReadings = [:]
+        qualityPeers = Set(session.roster.members.map(\.id)).subtracting([session.identity])
+        rtc.onConnectedPeers = { [weak self] peers in
+            guard let self, self.generation == id else { return }
+            self.connectedMediaPeers = peers
+            self.qualityReadings = self.qualityReadings.filter { peers.contains($0.key) }
+        }
         rtc.send = { [weak self] sdp, kind, target, epoch in
             guard let self else { throw VoiceError.ended }
             try await self.lobby.sendWebRTC(sdp: sdp, kind: kind, to: target, epoch: epoch)
@@ -440,6 +458,10 @@ final class CallStore: ObservableObject {
         }
         rtc.onQuality = { [weak self] links in
             guard let self, self.generation == id else { return }
+            let now = Date()
+            for link in links where self.connectedMediaPeers.contains(link.to) && self.qualityPeers.contains(link.to) {
+                self.qualityReadings[link.to] = CallQualityReading(link: link, received: now)
+            }
             self.lobby.sendQuality(links)
         }
         rtc.onProgress = { [weak self] message in
@@ -451,6 +473,21 @@ final class CallStore: ObservableObject {
         for signal in lobby.webRTCSignals { rtc.receive(signal) }
         for candidate in lobby.webRTCCandidates { rtc.receive(candidate) }
         observeAudio(id)
+    }
+
+    func mediaIndicator(peer: String? = nil, at now: Date) -> CallQualityIndicator {
+        guard mediaIsWebRTC else {
+            return CallQualityIndicator(transport: connected ? "TCP" : "?",
+                                        quality: connected ? .unavailable : .connecting)
+        }
+        if let peer {
+            guard connectedMediaPeers.contains(peer) else {
+                return CallQualityIndicator(transport: "?", quality: .connecting)
+            }
+            return qualityReadings[peer]?.indicator(at: now)
+                ?? CallQualityIndicator(transport: "?", quality: .measuring)
+        }
+        return CallQualityIndicator.summary(qualityPeers.sorted().map { mediaIndicator(peer: $0, at: now) })
     }
 
     func start() {
@@ -592,6 +629,10 @@ final class CallStore: ObservableObject {
         audio = nil
         rtcAudio?.stop()
         rtcAudio = nil
+        mediaIsWebRTC = false
+        qualityReadings = [:]
+        qualityPeers = []
+        connectedMediaPeers = []
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         UIApplication.shared.isIdleTimerDisabled = false

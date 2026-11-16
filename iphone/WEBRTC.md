@@ -241,8 +241,48 @@ Before rollout, test on two signed iPhones:
 
 ## Call Quality Diagnostics
 
+### In-Call Indicators
+
+The call header shows transport arrows with **UDP**, **TCP**, or both for a
+mixed group, plus a labeled quality icon. Each remote participant has its own
+indicator; expand the participant to see round-trip delay, jitter, inbound and
+outbound packet loss, concealed audio, and jitter-buffer delay.
+
+- Transport comes from the selected audio candidate, not the signaling
+  WebSocket. It describes the local leg from this iPhone; for TURN, this is
+  the phone-to-TURN connection. TURN/TLS is displayed as TCP. The other
+  phone's TURN transport can differ.
+- Quality is a local estimate. The group header uses the worst measured link,
+  not an average. Missing links prevent an all-Good result; a known Fair/Poor
+  result is marked **partial** when other links cannot yet be evaluated.
+- Samples update about every 10 seconds, with an initial warm-up of roughly
+  20 seconds. **Measuring** means insufficient data; **Connecting** means the
+  media link is not connected. **Stale** means no fresh interval report for
+  more than 25 seconds. `?` means unknown transport, including stale readings.
+- Roster changes, disconnects, and hangup clear previous readings. Indicators
+  work locally even when the relay does not support quality logging.
+- Legacy calls show **TCP** with quality **Unavailable**. Muting, silence,
+  low bitrate, and TCP transport alone do not lower the WebRTC quality estimate.
+
+Any available metric at or above a threshold sets the corresponding grade:
+
+| Metric | Fair | Poor |
+| --- | ---: | ---: |
+| Round-trip delay | 300 ms | 600 ms |
+| Jitter | 30 ms | 60 ms |
+| Inbound or outbound packet loss | 2% | 5% |
+| Concealed audio | 5% | 10% |
+| Jitter-buffer delay | 150 ms | 300 ms |
+
+**Good** additionally requires valid round-trip, jitter, inbound-loss, and
+concealment measurements. These are heuristic thresholds, not a speech-quality
+score or proof that the other person can hear you. Physical-device validation
+should include a mixed-route group, a degraded peer, reconnects, and large text.
+
+### Operator Logs
+
 Relays with TURN configured advertise a `quality` capability. Updated iPhones
-then sample WebRTC `getStats()` every 10 seconds and send one `rtc-quality`
+sample WebRTC `getStats()` every 10 seconds and, when supported, send one `rtc-quality`
 message per interval over the authenticated group socket. Older relays never
 receive it, and the relay drops malformed or stale reports without ending the
 call. Each connected link is logged on the relay:
@@ -268,4 +308,5 @@ docker compose logs -f relay | grep ' quality '
 
 `from`/`to` are the first 8 hex digits of SHA-256 over the device key. Both
 directions of a pair appear as separate lines. Set `VPCOMM_QUALITY_LOG=0` on the
-relay to stop logging. Reports are not stored apart from container logs.
+relay to stop logging. The app keeps only the latest in-memory readings for
+the call; reports are not persisted on the phone.

@@ -343,7 +343,7 @@ struct WebRTCQualitySample: Sendable, Equatable {
     }
 }
 
-/// Redacted interval summary of one link, sent to the relay for operator diagnosis.
+/// Redacted interval summary of one link, used locally and for operator diagnosis.
 struct WebRTCQualityLink: Codable, Equatable {
     var to: String
     var route: String
@@ -413,5 +413,86 @@ struct WebRTCQualityLink: Codable, Equatable {
         let text = String(decoding: try encoder.encode(links), as: UTF8.self)
         guard text.utf8.count <= 4096 else { throw VoiceError.packet }
         return ["type": "rtc-quality", "call": call, "links": text]
+    }
+}
+
+/// A local estimate, not a speech-quality score or proof of remote playback.
+enum CallQuality: String {
+    case good = "Good", fair = "Fair", poor = "Poor"
+    case measuring = "Measuring", stale = "Stale", connecting = "Connecting"
+    case unavailable = "Unavailable"
+
+    var symbol: String {
+        switch self {
+        case .good: return "checkmark.circle.fill"
+        case .fair: return "exclamationmark.circle.fill"
+        case .poor: return "exclamationmark.triangle.fill"
+        case .measuring: return "hourglass"
+        case .stale: return "clock.badge.exclamationmark"
+        case .connecting: return "arrow.triangle.2.circlepath"
+        case .unavailable: return "questionmark.circle"
+        }
+    }
+
+    static func estimate(_ link: WebRTCQualityLink) -> Self {
+        let metrics: [(Double?, Double, Double)] = [
+            (link.rttMs, 300, 600), (link.jitterMs, 30, 60),
+            (link.lossIn, 2, 5), (link.lossOut, 2, 5),
+            (link.conceal, 5, 10), (link.jbMs, 150, 300)
+        ]
+        let valid = metrics.filter { $0.0.map { $0.isFinite && $0 >= 0 } ?? false }
+        if valid.contains(where: { $0.0! >= $0.2 }) { return .poor }
+        if valid.contains(where: { $0.0! >= $0.1 }) { return .fair }
+        // RTT alone cannot establish healthy audio delivery. Silence/mute and
+        // low bitrate are not failures, but missing receive metrics stay unknown.
+        let required = [link.rttMs, link.jitterMs, link.lossIn, link.conceal]
+        return required.allSatisfy { $0.map { $0.isFinite && $0 >= 0 } ?? false }
+            ? .good : .measuring
+    }
+}
+
+struct CallQualityIndicator: Equatable {
+    var transport: String
+    var quality: CallQuality
+    var partial = false
+
+    var qualityLabel: String { quality.rawValue + (partial ? " (partial)" : "") }
+
+    static func localTransport(_ route: String) -> String {
+        let local = route.components(separatedBy: ">")[0].components(separatedBy: "/")
+        guard local.count == 2, WebRTCQualitySample.candidateTypes.contains(local[0]) else { return "?" }
+        switch local[1] {
+        case "udp": return "UDP"
+        case "tcp", "tls": return "TCP"
+        default: return "?"
+        }
+    }
+
+    static func summary(_ links: [Self]) -> Self {
+        guard !links.isEmpty else { return Self(transport: "?", quality: .measuring) }
+        let transport = Set(links.map(\.transport)).sorted().joined(separator: " / ")
+        let unknown = links.contains { ![.good, .fair, .poor].contains($0.quality) }
+        for quality in [CallQuality.poor, .fair, .connecting, .stale, .measuring, .unavailable, .good] {
+            if links.contains(where: { $0.quality == quality }) {
+                return Self(transport: transport, quality: quality,
+                            partial: unknown && [.poor, .fair].contains(quality))
+            }
+        }
+        return Self(transport: transport, quality: .measuring)
+    }
+}
+
+struct CallQualityReading {
+    let link: WebRTCQualityLink
+    let received: Date
+    static let maximumAge: TimeInterval = 25
+
+    func indicator(at now: Date) -> CallQualityIndicator {
+        let age = now.timeIntervalSince(received)
+        guard age >= 0, age <= Self.maximumAge else {
+            return CallQualityIndicator(transport: "?", quality: .stale)
+        }
+        return CallQualityIndicator(transport: CallQualityIndicator.localTransport(link.route),
+                                    quality: CallQuality.estimate(link))
     }
 }

@@ -145,6 +145,74 @@ struct ProtocolChecks {
         precondition(links.contains("\"rtt_ms\":250") && links.contains("\"route\":\"relay/tcp>srflx/udp\""))
         precondition(!links.contains("192.0.2.") && !links.contains("198.51.100."))
         try rejects { _ = try WebRTCQualityLink.message(call: "call", links: []) }
+        qualityIndicatorChecks(link)
+    }
+
+    static func qualityIndicatorChecks(_ report: WebRTCQualityLink) {
+        for (route, expected) in [
+            ("relay/tcp>srflx/udp", "TCP"), ("relay/tls>relay/udp", "TCP"),
+            ("host/udp>relay/tcp", "UDP"), ("srflx/udp>unknown", "UDP"),
+            ("unknown>relay/udp", "?"), ("relay>host/udp", "?"),
+            ("relay/sctp>host/udp", "?"), ("garbage/udp", "?"), ("", "?")
+        ] {
+            precondition(CallQualityIndicator.localTransport(route) == expected)
+        }
+        var good = report
+        good.rttMs = 100
+        good.jitterMs = 10
+        good.lossIn = 0
+        good.lossOut = 0
+        good.conceal = 0
+        good.jbMs = 50
+        precondition(CallQuality.estimate(good) == .good)
+        let thresholds: [(WritableKeyPath<WebRTCQualityLink, Double?>, Double, Double)] = [
+            (\.rttMs, 300, 600), (\.jitterMs, 30, 60), (\.lossIn, 2, 5),
+            (\.lossOut, 2, 5), (\.conceal, 5, 10), (\.jbMs, 150, 300)
+        ]
+        for (field, fair, poor) in thresholds {
+            var changed = good
+            changed[keyPath: field] = fair - 0.1
+            precondition(CallQuality.estimate(changed) == .good)
+            changed[keyPath: field] = fair
+            precondition(CallQuality.estimate(changed) == .fair)
+            changed[keyPath: field] = poor
+            precondition(CallQuality.estimate(changed) == .poor)
+        }
+        for field in [\WebRTCQualityLink.rttMs, \.jitterMs, \.lossIn, \.conceal] {
+            for value: Double? in [nil, .nan, .infinity, -1] {
+                var missing = good
+                missing[keyPath: field] = value
+                precondition(CallQuality.estimate(missing) == .measuring)
+                missing.lossOut = 10
+                precondition(CallQuality.estimate(missing) == .poor)
+            }
+        }
+        var silent = good
+        silent.muted = true
+        silent.micDb = -127
+        silent.spkDb = -127
+        silent.rxKbps = 0
+        silent.txKbps = 0
+        precondition(CallQuality.estimate(silent) == .good)
+        let now = Date(timeIntervalSince1970: 100)
+        let reading = CallQualityReading(link: good, received: now)
+        precondition(reading.indicator(at: now).quality == .good)
+        precondition(reading.indicator(at: now.addingTimeInterval(25)).transport == "TCP")
+        precondition(reading.indicator(at: now.addingTimeInterval(26)).quality == .stale)
+        precondition(reading.indicator(at: now.addingTimeInterval(26)).transport == "?")
+        precondition(reading.indicator(at: now.addingTimeInterval(-1)).quality == .stale)
+        let udp = CallQualityIndicator(transport: "UDP", quality: .good)
+        let tcp = CallQualityIndicator(transport: "TCP", quality: .poor)
+        let pending = CallQualityIndicator(transport: "?", quality: .measuring)
+        precondition(CallQualityIndicator.summary([]).quality == .measuring)
+        precondition(CallQualityIndicator.summary([udp, udp]) == udp)
+        let mixed = CallQualityIndicator.summary([udp, tcp])
+        precondition(mixed.transport == "TCP / UDP" && mixed.quality == .poor)
+        let partial = CallQualityIndicator.summary([udp, tcp, pending])
+        precondition(partial.quality == .poor && partial.partial && partial.transport.contains("?"))
+        precondition(CallQualityIndicator.summary([udp, pending]).quality == .measuring)
+        precondition(CallQualityIndicator.summary([udp, .init(transport: "?", quality: .connecting)]).quality == .connecting)
+        precondition(CallQualityIndicator.summary([udp, .init(transport: "?", quality: .stale)]).quality == .stale)
     }
 
     static func main() throws {

@@ -65,6 +65,10 @@ struct CallView: View {
                             Text(call.busy ? call.status : lobby.status)
                                 .font(.callout).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("lobbyStatus")
+                            if call.busy && !call.pairing {
+                                CallMediaIndicator(call: call)
+                                    .accessibilityHint("Group quality reflects the worst measured link. Expand a participant for details.")
+                            }
                         }
                         if (call.busy && !call.connected) || (lobby.active && !lobby.online) {
                             ProgressView().accessibilityLabel("Connecting")
@@ -82,7 +86,7 @@ struct CallView: View {
                         }.accessibilityIdentifier("setupConnection")
                     }
                 } else if !call.busy || call.groupAudio {
-                    LobbyView(lobby: lobby, callBusy: call.busy,
+                    LobbyView(lobby: lobby, call: call, callBusy: call.busy,
                               startCall: { call.openLobby(startCall: true) },
                               callMember: { call.openLobby(startCall: true, target: $0) })
                 }

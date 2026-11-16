@@ -29,6 +29,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         var remoteCandidates: [WebRTCCandidate] = []
         var candidateApplying: Task<Void, Never>?
         var quality: WebRTCQualitySample?
+        var qualityGeneration = UUID()
         init(peer: String, connection: RTCPeerConnection) {
             self.peer = peer
             self.connection = connection
@@ -49,6 +50,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     var sendCandidate: ((String, String, String, String) async throws -> Void)?
     var onFailure: ((String) -> Void)?
     var onConnected: ((Bool) -> Void)?
+    var onConnectedPeers: ((Set<String>) -> Void)?
     var onProgress: ((String) -> Void)?
     /// Redacted per-link interval statistics, emitted every `WebRTCQualityLink.interval` seconds.
     var onQuality: (([WebRTCQualityLink]) -> Void)?
@@ -117,18 +119,26 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     }
 
     private func sampleQuality() async {
-        var reports: [WebRTCQualityLink] = []
+        var reports: [(Link, UUID, WebRTCQualityLink)] = []
+        let epoch = session?.roster.message["epoch"]
         let muted = !(track?.isEnabled ?? false)
         for link in links.values.sorted(by: { $0.peer < $1.peer }) where link.connection.connectionState == .connected {
+            let generation = link.qualityGeneration
             let next = await Self.sample(link.connection)
-            guard current(link) else { continue }
+            guard current(link), link.connection.connectionState == .connected,
+                  generation == link.qualityGeneration else { continue }
             if let previous = link.quality,
                let report = WebRTCQualityLink(peer: link.peer, from: previous, to: next, muted: muted) {
-                reports.append(report)
+                reports.append((link, generation, report))
             }
             link.quality = next
         }
-        if !stopped, !reports.isEmpty { onQuality?(Array(reports.prefix(5))) }
+        let currentReports = reports.filter {
+            current($0.0) && $0.0.connection.connectionState == .connected && $0.0.qualityGeneration == $0.1
+        }.map { $0.2 }
+        if !stopped, epoch == session?.roster.message["epoch"], !currentReports.isEmpty {
+            onQuality?(Array(currentReports.prefix(5)))
+        }
     }
 
     func update(_ next: WebRTCSession) throws {
@@ -366,6 +376,10 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
 
     private func changed(_ pc: RTCPeerConnection, state: RTCPeerConnectionState) {
         guard let link = links.values.first(where: { $0.connection === pc }), current(link) else { return }
+        if state != .connected {
+            link.quality = nil
+            link.qualityGeneration = UUID()
+        }
         switch state {
         case .connected:
             link.deadline?.cancel(); link.deadline = nil
@@ -375,7 +389,10 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             failConnection(link)
         default: break
         }
-        onConnected?(!links.isEmpty && links.values.allSatisfy { $0.connection.connectionState == .connected })
+        var connected = Set(links.values.filter { $0.connection.connectionState == .connected }.map(\.peer))
+        if state != .connected { connected.remove(link.peer) }
+        onConnectedPeers?(connected)
+        onConnected?(!links.isEmpty && connected.count == links.count)
         reportProgress()
     }
 
@@ -390,6 +407,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     private func closeLinks() {
         let old = Array(links.values)
         links = [:]
+        onConnectedPeers?([])
         for link in old {
             link.negotiation?.cancel()
             link.publishing?.cancel()

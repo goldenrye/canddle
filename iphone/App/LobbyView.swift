@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LobbyView: View {
     @ObservedObject var lobby: GroupStore
+    @ObservedObject var call: CallStore
     let callBusy: Bool
     let startCall: () -> Void
     let callMember: (String) -> Void
@@ -114,6 +115,9 @@ struct LobbyView: View {
             Section("Participants (\(lobby.members.count)/\(lobby.memberLimit))") {
                 ForEach(lobby.members) { member in
                     DisclosureGroup {
+                        if callBusy && member.id != lobby.ownIdentity {
+                            CallMediaIndicator(call: call, peer: member.id, details: true)
+                        }
                         Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
                             .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                         if lobby.isCaller && member.id != lobby.ownIdentity {
@@ -124,8 +128,12 @@ struct LobbyView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Label(member.id == lobby.ownIdentity ? "\(member.name) (you)" : member.name,
                                   systemImage: member.id == lobby.ownIdentity ? "person.fill" : "person")
-                            Text(lobby.inCall ? "In call" : "Waiting for participants")
-                                .font(.caption).foregroundStyle(.secondary)
+                            if callBusy && member.id != lobby.ownIdentity {
+                                CallMediaIndicator(call: call, peer: member.id)
+                            } else {
+                                Text(lobby.inCall ? "In call" : "Waiting for participants")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -246,5 +254,78 @@ struct LobbyView: View {
                 }.font(.caption)
             }
         }
+    }
+}
+
+struct CallMediaIndicator: View {
+    @ObservedObject var call: CallStore
+    var peer: String? = nil
+    var details = false
+
+    private func color(_ quality: CallQuality) -> Color {
+        switch quality {
+        case .good: return .green
+        case .fair: return .orange
+        case .poor: return .red
+        default: return .secondary
+        }
+    }
+
+    var body: some View {
+        // Expire cached readings even if no subsequent getStats callback arrives.
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let indicator = call.mediaIndicator(peer: peer, at: context.date)
+            VStack(alignment: .leading, spacing: 6) {
+                if details {
+                    Text(call.mediaIsWebRTC
+                         ? "Audio transport from this iPhone. TURN/TLS is shown as TCP; the other phone's TURN connection may differ."
+                         : "Legacy audio uses TCP. Quality measurements are unavailable.")
+                    if let peer, let reading = call.qualityReadings[peer],
+                       ![.stale, .connecting].contains(indicator.quality) {
+                        Text(metrics(reading.link))
+                        Text("Estimated from recent network and audio statistics, not a guarantee of speech quality.")
+                    } else if call.mediaIsWebRTC {
+                        Text("Measurements arrive about every 10 seconds after a roughly 20-second warm-up. Stale means no fresh report for 25 seconds.")
+                    }
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        badges(indicator)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(indicator.transport, systemImage: "arrow.up.arrow.down")
+                            qualityBadge(indicator)
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Audio transport: \(indicator.transport.replacingOccurrences(of: "?", with: "Unknown")). Connection quality: \(indicator.qualityLabel).")
+                    .accessibilityIdentifier(peer.map { "mediaQuality-\($0)" } ?? "callMediaQuality")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func badges(_ indicator: CallQualityIndicator) -> some View {
+        HStack(spacing: 12) {
+            Label(indicator.transport, systemImage: "arrow.up.arrow.down")
+            qualityBadge(indicator)
+        }
+    }
+
+    private func qualityBadge(_ indicator: CallQualityIndicator) -> some View {
+        Label(indicator.qualityLabel, systemImage: indicator.quality.symbol)
+            .foregroundStyle(color(indicator.quality))
+    }
+
+    private func metrics(_ link: WebRTCQualityLink) -> String {
+        func value(_ number: Double?, unit: String) -> String {
+            guard let number, number.isFinite else { return "Unavailable" }
+            return String(format: "%.1f", number) + unit
+        }
+        return "Round-trip: \(value(link.rttMs, unit: " ms"))\n"
+            + "Jitter: \(value(link.jitterMs, unit: " ms"))\n"
+            + "Packet loss (in / out): \(value(link.lossIn, unit: "%")) / \(value(link.lossOut, unit: "%"))\n"
+            + "Concealed audio: \(value(link.conceal, unit: "%"))\n"
+            + "Jitter buffer: \(value(link.jbMs, unit: " ms"))"
     }
 }
