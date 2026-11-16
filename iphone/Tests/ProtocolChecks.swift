@@ -8,6 +8,72 @@ struct ProtocolChecks {
         throw NSError(domain: "Expected rejection", code: 1)
     }
 
+    static func trickleChecks() throws {
+        let keys = [Curve25519.Signing.PrivateKey(), Curve25519.Signing.PrivateKey()].sorted {
+            VoiceProtocol.base64($0.publicKey.rawRepresentation) < VoiceProtocol.base64($1.publicKey.rawRepresentation)
+        }
+        let offer = try LobbyOffer.create(identity: keys[0], name: "Caller", ephemeral: .init(), webRTC: true)
+        let request = try LobbyRequest.create(offer: offer, identity: keys[1], name: "Recipient", ephemeral: .init())
+        let members = [GroupMember(message: offer.message), GroupMember(message: request.message)]
+        let roster = try GroupRoster.create(offer: offer, revision: 1, members: members, signing: keys[0])
+        let sessions = keys.map {
+            WebRTCSession(offer: offer, roster: roster, identity: VoiceProtocol.base64($0.publicKey.rawRepresentation),
+                          servers: [], trickle: true)
+        }
+        let sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtcp-mux\r\na=mid:0\r\n"
+            + "a=rtpmap:111 opus/48000/2\r\na=fingerprint:sha-256 "
+            + Array(repeating: "AB", count: 32).joined(separator: ":") + "\r\n"
+            + WebRTCSignal.trickleAttribute + "\r\n"
+        let signal = try WebRTCSignal.create(sdp: sdp, kind: "offer", to: sessions[1].identity,
+                                            session: sessions[0], signing: keys[0])
+        let raw = "candidate:123 1 udp 2122260223 192.0.2.10 54321 typ host"
+        let update = try WebRTCCandidate.create(candidate: raw, mid: "0", sequence: 1, session: sessions[0],
+                                               description: signal, signing: keys[0])
+        let verified = try WebRTCCandidate(update.message, session: sessions[1], description: signal)
+        precondition(verified.candidate == raw && signal.supportsTrickle && signal.mid == "0")
+        for field in update.message.keys {
+            var tampered = update.message
+            tampered[field] = field == "candidate" ? raw.replacingOccurrences(of: "54321", with: "54322") : "invalid"
+            try rejects { _ = try WebRTCCandidate(tampered, session: sessions[1], description: signal) }
+        }
+        for raw in [raw + "\r\na=ice-pwd:bad", String(repeating: "a", count: 2049),
+                    "m=audio 9 UDP/TLS/RTP/SAVPF 111", raw.replacingOccurrences(of: " 1 udp ", with: " 2 udp ")] {
+            try rejects {
+                _ = try WebRTCCandidate.create(candidate: raw, mid: "0", sequence: 1, session: sessions[0],
+                                              description: signal, signing: keys[0])
+            }
+        }
+        let changed = try WebRTCSignal.create(sdp: sdp + "a=x-test:changed\r\n", kind: "offer",
+                                              to: sessions[1].identity, session: sessions[0], signing: keys[0])
+        try rejects { _ = try WebRTCCandidate(update.message, session: sessions[1], description: changed) }
+        var oldRelay = sessions[1]
+        oldRelay.trickle = false
+        try rejects { _ = try WebRTCCandidate(update.message, session: oldRelay, description: signal) }
+        let nextRoster = try GroupRoster.create(offer: offer, revision: 2, members: members, signing: keys[0])
+        let next = WebRTCSession(offer: offer, roster: nextRoster, identity: sessions[1].identity,
+                                servers: [], trickle: true)
+        try rejects { _ = try WebRTCCandidate(update.message, session: next, description: signal) }
+        var stream = WebRTCCandidateStream()
+        try stream.accept(verified)
+        try rejects { try stream.accept(verified) }
+        let end = try WebRTCCandidate.create(candidate: "", mid: "0", sequence: 2, session: sessions[0],
+                                            description: signal, signing: keys[0])
+        try stream.accept(end)
+        precondition(stream.ended)
+        try rejects { try stream.accept(end) }
+        stream = WebRTCCandidateStream()
+        for sequence in 1...WebRTCCandidate.limit {
+            try stream.accept(WebRTCCandidate.create(candidate: raw, mid: "0", sequence: sequence,
+                session: sessions[0], description: signal, signing: keys[0]))
+        }
+        try rejects {
+            _ = try WebRTCCandidate.create(candidate: raw, mid: "0", sequence: 65, session: sessions[0],
+                                          description: signal, signing: keys[0])
+        }
+        try stream.accept(WebRTCCandidate.create(candidate: "", mid: "0", sequence: 65, session: sessions[0],
+                                               description: signal, signing: keys[0]))
+    }
+
     static func webRTCSetupChecks() {
         let cases: [(Bool, Bool, Bool, Bool, Bool, Bool, WebRTCSetupStage)] = [
             (false, false, false, false, false, false, .waitingForOffer),
@@ -82,6 +148,7 @@ struct ProtocolChecks {
     }
 
     static func main() throws {
+        try trickleChecks()
         webRTCSetupChecks()
         try webRTCQualityChecks()
         let invite = try CallInvitation.generate()

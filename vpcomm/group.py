@@ -7,12 +7,15 @@ import time
 from .crypto import decode, encode
 from .lobby import Lobby, offer_fields, transcript, verify
 from .webrtc import (
+    CANDIDATE_FIELDS,
     QUALITY_LOG,
     SIGNAL_LIMIT,
+    description_info,
     log_quality,
     parse_quality,
     pseudonym,
     signal_fields,
+    validate_candidate,
     validate_sdp,
 )
 
@@ -26,6 +29,8 @@ class GroupLobby(Lobby):
         self.turn = turn
         self.epochs = {}
         self.rtc_signals = {}
+        self.rtc_descriptions = {}
+        self.rtc_candidates = {}
         self.members = {}
         self.revisions = {}
         self.paused = set()
@@ -38,7 +43,7 @@ class GroupLobby(Lobby):
             **super().challenge(nonce),
             "presence": "1",
             "direct": "1",
-            **({"webrtc": "1", "quality": "1"} if self.turn else {}),
+            **({"webrtc": "1", "quality": "1", "trickle": "1"} if self.turn else {}),
         }
 
     def visible_offer(self, offer, peer):
@@ -128,6 +133,16 @@ class GroupLobby(Lobby):
         return value
 
     def admit_control(self, peer, message):
+        if message.get("type") == "rtc-candidate":
+            # Separate burst budget for up to five links. Stale updates consume
+            # this too, without exhausting ordinary call-control allowances.
+            now = time.monotonic()
+            peer.ice_allowance = min(512, peer.ice_allowance + (now - peer.ice_last) * 64)
+            peer.ice_last = now
+            if peer.ice_allowance < 1:
+                raise ValueError("ICE candidate flood")
+            peer.ice_allowance -= 1
+            return
         # SDP has its own strict one-message-per-directed-pair/epoch budget.
         if message.get("type") != "rtc-signal":
             super().admit_control(peer, message)
@@ -142,6 +157,8 @@ class GroupLobby(Lobby):
         self.revisions.pop(call, None)
         self.epochs.pop(call, None)
         self.rtc_signals.pop(call, None)
+        self.rtc_descriptions.pop(call, None)
+        self.rtc_candidates.pop(call, None)
         self.paused.discard(call)
         super().close_offer(call, reason)
         self.presence_changed()
@@ -191,6 +208,9 @@ class GroupLobby(Lobby):
             return
         if kind == "rtc-signal":
             self.rtc_signal(peer, message)
+            return
+        if kind == "rtc-candidate":
+            self.rtc_candidate(peer, message)
             return
         if kind == "rtc-quality":
             self.rtc_quality(peer, message)
@@ -366,6 +386,8 @@ class GroupLobby(Lobby):
         self.revisions[call] = revision
         self.epochs[call] = message["epoch"]
         self.rtc_signals[call] = set()
+        self.rtc_descriptions[call] = {}
+        self.rtc_candidates[call] = {}
         self.paused.discard(call)
         if revision == 1:
             offer.expiry.cancel()
@@ -418,6 +440,57 @@ class GroupLobby(Lobby):
             peer.identity, message["signature"], transcript("rtc-signal", *signal_fields(message))
         )
         self.rtc_signals[call].add(pair)
+        self.rtc_descriptions[call][pair] = description_info(message["sdp"])
+        other = self.peers.get(target)
+        if other:
+            other.emit(message)
+
+    def rtc_candidate(self, peer, message):
+        if set(message) != set(CANDIDATE_FIELDS) | {"type", "signature"}:
+            raise ValueError("Invalid ICE update")
+        call = message["call"]
+        offer = self.offers.get(call)
+        if (
+            not peer.webrtc
+            or not offer
+            or offer.message.get("media") != "webrtc"
+            or peer.joined != call
+            or peer.identity not in self.members[call]
+            or message["identity"] != peer.identity
+        ):
+            raise ValueError("Not admitted to WebRTC call")
+        if int(message["revision"]) < self.revisions[call] or call in self.paused:
+            return
+        target = message["to"]
+        if (
+            message["revision"] != str(self.revisions[call])
+            or message["epoch"] != self.epochs.get(call)
+            or target == peer.identity
+            or target not in self.members[call]
+        ):
+            raise ValueError("Invalid ICE pair or epoch")
+        pair = (peer.identity, target)
+        local = self.rtc_descriptions[call].get(pair)
+        remote = self.rtc_descriptions[call].get((target, peer.identity))
+        if (
+            not local
+            or not remote
+            or not local[2]
+            or not remote[2]
+            or message["description"] != local[0]
+            or message["mid"] != local[1]
+        ):
+            raise ValueError("Trickle ICE was not negotiated for this description")
+        sequence = validate_candidate(message)
+        previous, ended = self.rtc_candidates[call].get(pair, (0, False))
+        if ended or sequence != previous + 1:
+            raise ValueError("Replayed or out-of-order ICE candidate")
+        verify(
+            peer.identity,
+            message["signature"],
+            transcript("rtc-candidate", *[message[key] for key in CANDIDATE_FIELDS]),
+        )
+        self.rtc_candidates[call][pair] = (sequence, message["candidate"] == "")
         other = self.peers.get(target)
         if other:
             other.emit(message)

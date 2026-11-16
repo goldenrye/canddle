@@ -19,6 +19,15 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         var localDelivered = false
         var remoteSet = false
         var remoteApplied = false
+        var remoteTrickle = false
+        var localSDP: String?
+        var localCandidates: [String] = []
+        var seenCandidates = Set<String>()
+        var sentCandidates = Set<String>()
+        var localEnded = false
+        var candidateSending: Task<Void, Never>?
+        var remoteCandidates: [WebRTCCandidate] = []
+        var candidateApplying: Task<Void, Never>?
         var quality: WebRTCQualitySample?
         init(peer: String, connection: RTCPeerConnection) {
             self.peer = peer
@@ -37,6 +46,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     private var track: RTCAudioTrack?
     private var stopped = false
     var send: ((String, String, String, String) async throws -> Void)?
+    var sendCandidate: ((String, String, String, String) async throws -> Void)?
     var onFailure: ((String) -> Void)?
     var onConnected: ((Bool) -> Void)?
     var onProgress: ((String) -> Void)?
@@ -175,6 +185,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         guard let session, signal.message["epoch"] == session.roster.message["epoch"],
               let link = links[signal.identity], !link.remoteSet, current(link) else { return }
         link.remoteSet = true
+        link.remoteTrickle = session.trickle && signal.supportsTrickle
         reportProgress()
         link.negotiation = Task {
             do {
@@ -183,6 +194,8 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                 try await link.connection.setRemoteDescription(description)
                 guard current(link) else { return }
                 link.remoteApplied = true
+                applyCandidates(link)
+                publishCandidates(link)
                 reportProgress()
                 if signal.kind == "offer" {
                     let answer = try await link.connection.answer(for: constraints)
@@ -191,6 +204,33 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                     if current(link) { localDescriptionSet(link) }
                 }
             } catch { if current(link) { fail("Authenticated WebRTC negotiation failed.") } }
+        }
+    }
+
+    func receive(_ update: WebRTCCandidate) {
+        guard let session, update.message["epoch"] == session.roster.message["epoch"],
+              let link = links[update.identity], current(link), link.remoteTrickle,
+              link.remoteCandidates.count < WebRTCCandidate.limit + 1 else { return }
+        link.remoteCandidates.append(update)
+        applyCandidates(link)
+    }
+
+    private func applyCandidates(_ link: Link) {
+        guard current(link), link.remoteApplied, link.candidateApplying == nil,
+              !link.remoteCandidates.isEmpty else { return }
+        link.candidateApplying = Task {
+            defer { link.candidateApplying = nil }
+            do {
+                while current(link), !link.remoteCandidates.isEmpty {
+                    let update = link.remoteCandidates.removeFirst()
+                    // The SDK has no nullable add-candidate API. The signed end
+                    // marker closes our sequence; no empty candidate is injected.
+                    if !update.ended {
+                        try await link.connection.add(RTCIceCandidate(
+                            sdp: update.candidate, sdpMLineIndex: 0, sdpMid: update.mid))
+                    }
+                }
+            } catch { if current(link) { fail("Authenticated ICE candidate could not be applied.") } }
         }
     }
 
@@ -213,9 +253,10 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     }
 
     private func gatheringReady(_ link: Link) -> Bool {
+        // An answerer already knows whether its peer supports trickle. The
+        // initial offer retains the bounded legacy gather for older recipients.
+        if link.remoteTrickle { return true }
         if link.connection.iceGatheringState == .complete { return true }
-        // Non-trickle: once a TURN relay candidate exists (or the cutoff passes with at
-        // least one candidate), later candidates would add little and may never arrive.
         let hasCandidate = link.connection.localDescription?.sdp.contains("a=candidate:") == true
         return hasCandidate && (link.relayGathered || link.gatherCutoffPassed)
     }
@@ -228,16 +269,62 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         link.localSent = true
         link.gatherCutoff?.cancel(); link.gatherCutoff = nil
         let epoch = session.roster.message["epoch"]!
-        // Non-trickle ICE sends one bounded, signed description per directed
-        // pair/epoch, including all candidates, instead of unsigned candidate updates.
+        let sdp = description.sdp + (session.trickle ? WebRTCSignal.trickleAttribute + "\r\n" : "")
+        link.localSDP = sdp
+        link.sentCandidates = Set(sdp.components(separatedBy: .newlines).filter {
+            $0.hasPrefix("a=candidate:")
+        }.map { String($0.dropFirst(2)) })
         link.publishing = Task {
             do {
                 guard let send else { throw VoiceError.ended }
-                try await send(description.sdp, description.type == .offer ? "offer" : "answer", link.peer, epoch)
+                try await send(sdp, description.type == .offer ? "offer" : "answer", link.peer, epoch)
                 guard current(link) else { return }
                 link.localDelivered = true
+                publishCandidates(link)
                 reportProgress()
             } catch { if current(link) { fail("WebRTC signaling could not be sent.") } }
+        }
+    }
+
+    private func rememberCandidate(_ candidate: String, link: Link) {
+        guard session?.trickle == true, current(link), !link.localEnded,
+              link.seenCandidates.count < WebRTCCandidate.limit,
+              link.seenCandidates.insert(candidate).inserted else { return }
+        link.localCandidates.append(candidate)
+    }
+
+    private func publishCandidates(_ link: Link) {
+        guard current(link), link.remoteTrickle, link.localDelivered, !link.localEnded,
+              link.candidateSending == nil, let session, let sdp = link.localSDP,
+              let midLine = sdp.components(separatedBy: .newlines).first(where: { $0.hasPrefix("a=mid:") })
+        else { return }
+        let mid = String(midLine.dropFirst(6))
+        let epoch = session.roster.message["epoch"]!
+        link.candidateSending = Task {
+            defer { link.candidateSending = nil }
+            do {
+                guard let sendCandidate else { throw VoiceError.ended }
+                // Snapshot complete gathering as well as delegate events, so an
+                // end marker cannot overtake candidates queued onto the actor.
+                var finishedGathering = false
+                while current(link) {
+                    finishedGathering = link.connection.iceGatheringState == .complete
+                    if finishedGathering {
+                        for line in (link.connection.localDescription?.sdp ?? "").components(separatedBy: .newlines)
+                            where line.hasPrefix("a=candidate:") {
+                            rememberCandidate(String(line.dropFirst(2)), link: link)
+                        }
+                    }
+                    guard !link.localCandidates.isEmpty else { break }
+                    let candidate = link.localCandidates.removeFirst()
+                    guard link.sentCandidates.insert(candidate).inserted else { continue }
+                    try await sendCandidate(candidate, mid, link.peer, epoch)
+                }
+                if current(link), finishedGathering {
+                    link.localEnded = true
+                    try await sendCandidate("", mid, link.peer, epoch)
+                }
+            } catch { if current(link) { fail("Authenticated ICE candidate could not be sent.") } }
         }
     }
 
@@ -308,6 +395,8 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             link.publishing?.cancel()
             link.deadline?.cancel()
             link.gatherCutoff?.cancel()
+            link.candidateSending?.cancel()
+            link.candidateApplying?.cancel()
             link.connection.close()
         }
     }
@@ -326,6 +415,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         Task { @MainActor in
             if let link = self.links.values.first(where: { $0.connection === peerConnection }) {
                 self.publish(link)
+                self.publishCandidates(link)
             }
         }
     }
@@ -338,13 +428,20 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        guard candidate.sdp.contains(" typ relay") else { return }
+        guard candidate.sdpMLineIndex == 0 else { return }
         Task { @MainActor in
-            // Let the description pick up the new candidate before publishing it.
-            try? await Task.sleep(nanoseconds: 300_000_000)
             if let link = self.links.values.first(where: { $0.connection === peerConnection }) {
-                link.relayGathered = true
-                self.publish(link)
+                self.rememberCandidate(candidate.sdp, link: link)
+                self.publishCandidates(link)
+                let relay = candidate.sdp.contains(" typ relay")
+                if !link.localSent && (relay || link.gatherCutoffPassed) {
+                    // Let the snapshot pick up this route, including the first
+                    // host candidate arriving after an initially empty cutoff.
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    guard self.current(link) else { return }
+                    link.relayGathered = link.relayGathered || relay
+                    self.publish(link)
+                }
             }
         }
     }

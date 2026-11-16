@@ -124,6 +124,7 @@ final class CallStore: ObservableObject {
             catch { self.failWebRTC("Could not update WebRTC membership securely.") }
         }
         lobby.onWebRTCSignal = { [weak self] signal in self?.rtcAudio?.receive(signal) }
+        lobby.onWebRTCCandidate = { [weak self] candidate in self?.rtcAudio?.receive(candidate) }
         lobby.onCallClosed = { [weak self] call in self?.systemCalls.closed(call) }
         lobby.onDisconnected = { [weak self] in self?.systemCalls.disconnected() }
         lobby.onAudioEnded = { [weak self] message in
@@ -424,6 +425,10 @@ final class CallStore: ObservableObject {
             guard let self else { throw VoiceError.ended }
             try await self.lobby.sendWebRTC(sdp: sdp, kind: kind, to: target, epoch: epoch)
         }
+        rtc.sendCandidate = { [weak self] candidate, mid, target, epoch in
+            guard let self, self.generation == id else { throw VoiceError.ended }
+            try await self.lobby.sendWebRTCCandidate(candidate: candidate, mid: mid, to: target, epoch: epoch)
+        }
         rtc.onFailure = { [weak self] message in
             guard self?.generation == id else { return }
             self?.failWebRTC(message)
@@ -444,6 +449,7 @@ final class CallStore: ObservableObject {
         status = "Connecting WebRTC audio..."
         try rtc.start(session)
         for signal in lobby.webRTCSignals { rtc.receive(signal) }
+        for candidate in lobby.webRTCCandidates { rtc.receive(candidate) }
         observeAudio(id)
     }
 

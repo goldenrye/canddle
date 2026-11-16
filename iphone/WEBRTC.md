@@ -26,6 +26,26 @@ continue to receive legacy calls. The desktop/manual-invitation path is unchange
 Do not remove existing APNs configuration: WebRTC does not wake a suspended app.
 See [Background Calls](BACKGROUND_CALLS.md) for provisioning and push setup.
 
+### Trickle ICE Updates
+
+Upgrade the relay and participating iPhones to enable authenticated trickle ICE.
+No new TURN credentials or ports are needed. The relay advertises `trickle=1`;
+each updated device then includes `a=x-canddle-trickle:1` inside its signed SDP.
+Candidate updates are sent only after both peers' signed descriptions opt in.
+An older WebRTC app ignores the extra SDP attribute and continues using the
+SDP-only path. An older relay receives no candidate-update messages.
+
+The initial offer keeps bounded gathering for compatibility with unknown peers:
+it publishes when gathering completes, a relay candidate is ready, or after four
+seconds if candidates exist. A trickle-capable answerer can publish immediately.
+Once negotiated, new candidates continue to be delivered, including UDP candidates
+discovered after that initial cutoff. Updates arriving before the remote
+description is applied are queued until the native SDK is ready.
+
+This makes late routes eligible for ICE connectivity checks; it does not force
+UDP, guarantee a switch from a working TCP route, or implement ICE restart.
+Keep TURN/TCP fallback available. Check `route=` quality logs on real networks.
+
 ## Self-Hosted TURN
 
 The Python relay issues two-hour coturn REST credentials after authenticated
@@ -105,7 +125,11 @@ WebRTC is disabled; partially configured values fail startup.
   tampering, wrong recipients, duplicate descriptions and invalid epochs.
   PCM media frames are rejected for WebRTC calls.
 - The lower sorted public identity offers, avoiding negotiation collisions.
-  Non-trickle ICE sends one complete description per directed pair/epoch.
+  There is one signed description per directed pair/epoch. Negotiated trickle
+  adds up to 64 signed candidate updates plus an end marker in each direction,
+  bound to that exact description, pair and epoch. Replays, sequence gaps and
+  updates after the end marker are rejected. Remaining late candidates are not
+  discarded merely because the first description has already been sent.
 - Each signed membership change closes all old peer connections and creates
   fresh connections/certificates. This revokes removed participants' links but
   creates a brief renegotiation gap for remaining participants.
@@ -129,10 +153,10 @@ the relay checks TURN configuration syntax, not the running service or firewall.
 The call screen now reports its current media-setup stage. Timeout alerts include
 a stage code and redacted local/remote SDP candidate counts, not SDP, IPs or secrets:
 
-- `RTC_GATHERING`: no candidates were gathered. This non-trickle implementation
-  sends its SDP once gathering completes, once a TURN relay candidate exists, or
-  after a 4-second cutoff with whatever candidates exist, because a silent TURN
-  endpoint or interface can otherwise leave gathering incomplete indefinitely. Check listener access, DNS and
+- `RTC_GATHERING`: the initial description is still waiting for candidates.
+  Before peer trickle support is known, the bounded compatibility gather above
+  applies. Once trickle is negotiated, full gathering no longer gates sending
+  an answer or delivering late candidates. Check listener access, DNS and
   TURN responses; a zero relay count does not by itself prove bad credentials.
 - `RTC_WAIT_OFFER` / `RTC_WAIT_ANSWER`: the other device has not supplied its
   description. Check its error too; it may be stalled in gathering or audio setup.
@@ -187,6 +211,11 @@ xcrun swiftc -parse-as-library \
 
 This probe uses receive-only transceivers: it does not record or play sound.
 Successful negotiation does not establish physical audio quality.
+Run `/tmp/canddle-webrtc-checks --trickle` and
+`/tmp/canddle-webrtc-checks --trickle-stalled-turn` to test signed UDP candidates
+delivered five seconds after candidate-free initial SDP. Both verify actual
+UDP ICE/DTLS connectivity; the second verifies gathering is still incomplete
+at candidate delivery because a local TURN endpoint is deliberately silent.
 Run `/tmp/canddle-webrtc-checks --stalled-turn` to reproduce incomplete gathering
 against a silent loopback TURN endpoint. With the pinned SDK, gathering remains
 incomplete after 26 seconds despite available host candidates, outlasting the
@@ -198,6 +227,9 @@ Before rollout, test on two signed iPhones:
 - Wi-Fi-to-Wi-Fi, Wi-Fi-to-cellular, and cellular-to-cellular calls.
 - Confirm TURN allocation when direct connectivity is unavailable. Test UDP
   blocked with TURN/TCP allowed, then all media ports blocked (clear call failure).
+- Delay UDP candidate availability beyond four seconds with TCP also available;
+  check candidate delivery and selected-route logs. Include older WebRTC apps
+  in a mixed-version group, and test against a relay without trickle support.
 - Ring and answer while locked/backgrounded. Confirm no microphone before answer
   and admission; verify two-way audio, mute/unmute, speaker and Bluetooth routes.
 - Add/remove group members, including six participants; removed devices must

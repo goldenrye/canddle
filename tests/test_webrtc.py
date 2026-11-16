@@ -18,7 +18,11 @@ from vpcomm.lobby import offer_fields, transcript
 from vpcomm.push import PushDevices, PushService
 from vpcomm.server import Relay, build_server
 from vpcomm.webrtc import (
+    CANDIDATE_FIELDS,
+    CANDIDATE_LIMIT,
+    TRICKLE_ATTRIBUTE,
     TURNConfig,
+    description_info,
     from_environment,
     parse_quality,
     pseudonym,
@@ -67,6 +71,8 @@ async def server():
     assert not relay.group.members
     assert not relay.group.epochs
     assert not relay.group.rtc_signals
+    assert not relay.group.rtc_descriptions
+    assert not relay.group.rtc_candidates
 
 
 async def enable(socket):
@@ -365,3 +371,193 @@ async def test_quality_requires_webrtc_and_structure():
         await send(b, {"type": "rtc-quality", "call": announcement["call"]})
         with pytest.raises(ConnectionClosed):
             await b.recv()
+
+
+TRICKLE_SDP = SDP + "a=mid:0\r\n" + TRICKLE_ATTRIBUTE + "\r\n"
+ICE = "candidate:123 1 udp 2122260223 192.0.2.10 54321 typ host"
+
+
+def candidate(device, other, membership, sequence=1, raw=ICE, sdp=TRICKLE_SDP):
+    message = {
+        "type": "rtc-candidate",
+        "call": membership["call"],
+        "revision": membership["revision"],
+        "epoch": membership["epoch"],
+        "identity": device.identity,
+        "to": other.identity,
+        "description": description_info(sdp)[0],
+        "sequence": str(sequence),
+        "mid": "0",
+        "index": "0",
+        "candidate": raw,
+    }
+    return sign_candidate(device, message)
+
+
+def sign_candidate(device, message):
+    message["signature"] = encode(
+        device.key.sign(transcript("rtc-candidate", *[message[key] for key in CANDIDATE_FIELDS]))
+    )
+    return message
+
+
+async def descriptions(a, alice, b, bob, membership, left=TRICKLE_SDP, right=TRICKLE_SDP):
+    await send(a, signal(alice, bob, membership, left))
+    await recv(b, "rtc-signal")
+    await send(b, signal(bob, alice, membership, right))
+    await recv(a, "rtc-signal")
+
+
+@pytest.mark.parametrize("direct", [False, True])
+async def test_trickle_pair_delivery_and_end_marker(direct):
+    async with (
+        server() as (group, url),
+        client(url, direct=True) as (a, alice),
+        client(url, direct=True) as (b, bob),
+        client(url) as (legacy, _),
+    ):
+        _, _, membership = await admit(a, alice, b, bob, direct)
+        assert group.challenge("nonce")["trickle"] == "1"
+        await descriptions(a, alice, b, bob, membership)
+        for seq, raw in enumerate([ICE, ICE.replace("123 ", "456 "), ""], start=1):
+            update = candidate(alice, bob, membership, seq, raw)
+            await send(a, update)
+            assert await recv(b, "rtc-candidate") == update
+        await send(b, candidate(bob, alice, membership))
+        await recv(a, "rtc-candidate")
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(legacy.recv(), 0.05)
+
+
+@pytest.mark.parametrize("field", list(CANDIDATE_FIELDS) + ["signature"])
+async def test_trickle_tampering_rejected(field):
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        _, _, membership = await admit(a, alice, b, bob)
+        await descriptions(a, alice, b, bob, membership)
+        message = candidate(alice, bob, membership)
+        message[field] = {
+            "revision": "2",
+            "candidate": ICE.replace("54321", "54322"),
+        }.get(field, "tampered")
+        await send(a, message)
+        with pytest.raises(ConnectionClosed):
+            await a.recv()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"candidate": ICE + "\r\na=ice-pwd:injected"},
+        {"candidate": "m=audio 9 UDP/TLS/RTP/SAVPF 111"},
+        {"candidate": ICE + "x" * 2048},
+        {"candidate": ICE.replace(" 1 udp ", " 2 udp ")},
+        {"sequence": "0"},
+        {"sequence": "01"},
+        {"sequence": "2"},
+        {"index": "1"},
+        {"mid": "other"},
+        {"description": encode(bytes(32))},
+    ],
+)
+async def test_signed_invalid_trickle_update_rejected(mutation):
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        _, _, membership = await admit(a, alice, b, bob)
+        await descriptions(a, alice, b, bob, membership)
+        message = sign_candidate(alice, {**candidate(alice, bob, membership), **mutation})
+        await send(a, message)
+        with pytest.raises(ConnectionClosed):
+            await a.recv()
+
+
+@pytest.mark.parametrize("ended", [False, True])
+async def test_trickle_replay_or_update_after_end_rejected(ended):
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        _, _, membership = await admit(a, alice, b, bob)
+        await descriptions(a, alice, b, bob, membership)
+        message = candidate(alice, bob, membership, raw="" if ended else ICE)
+        await send(a, message)
+        await recv(b, "rtc-candidate")
+        await send(a, candidate(alice, bob, membership, sequence=2) if ended else message)
+        with pytest.raises(ConnectionClosed):
+            await a.recv()
+
+
+@pytest.mark.parametrize("left,right", [(SDP, TRICKLE_SDP), (TRICKLE_SDP, SDP), (SDP, SDP)])
+async def test_trickle_requires_both_signed_capabilities(left, right):
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        _, _, membership = await admit(a, alice, b, bob)
+        await descriptions(a, alice, b, bob, membership, left, right)
+        await send(a, candidate(alice, bob, membership, sdp=left))
+        with pytest.raises(ConnectionClosed):
+            await a.recv()
+
+
+async def test_trickle_requires_descriptions_and_admission():
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        _, _, membership = await admit(a, alice, b, bob)
+        await send(a, candidate(alice, bob, membership))
+        with pytest.raises(ConnectionClosed):
+            await a.recv()
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        await enable(a)
+        await enable(b)
+        announcement = offer(alice)
+        await send(a, announcement)
+        await recv(a, "offer")
+        await recv(b, "offer")
+        await send(b, candidate(bob, alice, roster(alice, announcement, [announcement])))
+        with pytest.raises(ConnectionClosed):
+            await b.recv()
+
+
+@pytest.mark.parametrize("end", [False, True])
+async def test_trickle_candidate_bound(end):
+    async with server() as (_, url), client(url) as (a, alice), client(url) as (b, bob):
+        _, _, membership = await admit(a, alice, b, bob)
+        await descriptions(a, alice, b, bob, membership)
+        for sequence in range(1, CANDIDATE_LIMIT + 1):
+            await send(a, candidate(alice, bob, membership, sequence))
+            await recv(b, "rtc-candidate")
+        message = candidate(alice, bob, membership, CANDIDATE_LIMIT + 1, "" if end else ICE)
+        await send(a, message)
+        if end:
+            assert await recv(b, "rtc-candidate") == message
+        else:
+            with pytest.raises(ConnectionClosed):
+                await a.recv()
+
+
+async def test_trickle_epoch_reset_removal_and_stale_delivery():
+    async with server() as (group, url), client(url) as (a, alice), client(url) as (b, bob):
+        announcement, request, membership = await admit(a, alice, b, bob)
+        await descriptions(a, alice, b, bob, membership)
+        old = candidate(alice, bob, membership)
+        await send(a, old)
+        await recv(b, "rtc-candidate")
+        updated = roster(alice, announcement, [announcement, request], revision=2)
+        await send(a, updated)
+        await recv(a, "roster")
+        await recv(b, "roster")
+        assert group.rtc_candidates[announcement["call"]] == {}
+        await send(a, old)  # In-flight candidates do not tear down the new epoch.
+        await descriptions(a, alice, b, bob, updated)
+        message = candidate(alice, bob, updated)
+        await send(a, message)
+        assert await recv(b, "rtc-candidate") == message
+        removed = roster(alice, announcement, [announcement], revision=3)
+        await send(a, removed)
+        await recv(a, "roster")
+        await recv(b, "roster")
+        await send(b, candidate(bob, alice, removed))
+        with pytest.raises(ConnectionClosed):
+            await b.recv()
+
+
+async def test_trickle_flood_budget_also_covers_stale_updates():
+    async with server() as (group, url), client(url) as (a, alice), client(url) as (b, bob):
+        _, _, membership = await admit(a, alice, b, bob)
+        peer = group.peers[alice.identity]
+        peer.ice_allowance = -100
+        await send(a, candidate(alice, bob, {**membership, "revision": "0"}))
+        with pytest.raises(ConnectionClosed):
+            await a.recv()

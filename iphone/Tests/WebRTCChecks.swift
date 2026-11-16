@@ -23,7 +23,10 @@ struct WebRTCChecks {
         config.rtcpMuxPolicy = .require
         config.continualGatheringPolicy = .gatherOnce
         config.iceServers = []
+        let trickle = CommandLine.arguments.contains("--trickle")
+            || CommandLine.arguments.contains("--trickle-stalled-turn")
         let stalledTURN = CommandLine.arguments.contains("--stalled-turn")
+            || CommandLine.arguments.contains("--trickle-stalled-turn")
         var blackhole: Int32 = -1
         defer { if blackhole >= 0 { Darwin.close(blackhole) } }
         if stalledTURN {
@@ -75,11 +78,12 @@ struct WebRTCChecks {
             signing: keys[0])
         let sessions = keys.map {
             WebRTCSession(offer: announcement, roster: roster,
-                          identity: VoiceProtocol.base64($0.publicKey.rawRepresentation), servers: [])
+                          identity: VoiceProtocol.base64($0.publicKey.rawRepresentation), servers: [],
+                          trickle: trickle)
         }
         let offer = try await a.offer(for: constraints)
         try await a.setLocalDescription(offer)
-        if stalledTURN {
+        if stalledTURN && !trickle {
             let deadline = ContinuousClock.now.advanced(by: .seconds(26))
             while a.iceGatheringState != .complete && ContinuousClock.now < deadline {
                 try await Task.sleep(nanoseconds: 50_000_000)
@@ -96,24 +100,62 @@ struct WebRTCChecks {
                   + "candidates=\(candidates.count), relay=\(candidates.filter { $0.contains(" typ relay") }.count)")
             return
         }
-        try await wait { a.iceGatheringState == .complete }
-        let signedOffer = try WebRTCSignal.create(sdp: a.localDescription!.sdp, kind: "offer",
+        func initialSDP(_ sdp: String) -> String {
+            guard trickle else { return sdp }
+            return sdp.components(separatedBy: .newlines).filter {
+                !$0.isEmpty && !$0.hasPrefix("a=candidate:") && $0 != "a=end-of-candidates"
+            }.joined(separator: "\r\n") + "\r\n" + WebRTCSignal.trickleAttribute + "\r\n"
+        }
+        if !trickle { try await wait { a.iceGatheringState == .complete } }
+        let signedOffer = try WebRTCSignal.create(sdp: initialSDP(a.localDescription!.sdp), kind: "offer",
             to: sessions[1].identity, session: sessions[0], signing: keys[0])
         let verifiedOffer = try WebRTCSignal(signedOffer.message, session: sessions[1])
         try await b.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: verifiedOffer.sdp))
         let answer = try await b.answer(for: constraints)
         try await b.setLocalDescription(answer)
-        try await wait { b.iceGatheringState == .complete }
-        let signedAnswer = try WebRTCSignal.create(sdp: b.localDescription!.sdp, kind: "answer",
+        if !trickle { try await wait { b.iceGatheringState == .complete } }
+        let signedAnswer = try WebRTCSignal.create(sdp: initialSDP(b.localDescription!.sdp), kind: "answer",
             to: sessions[0].identity, session: sessions[1], signing: keys[1])
         let verifiedAnswer = try WebRTCSignal(signedAnswer.message, session: sessions[0])
         try await a.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: verifiedAnswer.sdp))
+        if trickle {
+            precondition(!verifiedOffer.sdp.contains("a=candidate:") && !verifiedAnswer.sdp.contains("a=candidate:"))
+            // Deliberately deliver UDP candidates later than the former four-second
+            // cutoff. There must be no connection until the signed updates arrive.
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+            precondition(a.connectionState != .connected && b.connectionState != .connected)
+            if stalledTURN { precondition(a.iceGatheringState != .complete) }
+            for (index, from, to, description) in [(0, a, b, signedOffer), (1, b, a, signedAnswer)] {
+                let candidates = from.localDescription!.sdp.components(separatedBy: .newlines).filter {
+                    $0.hasPrefix("a=candidate:") && $0.contains(" udp ")
+                }.map { String($0.dropFirst(2)) }
+                precondition(!candidates.isEmpty)
+                var stream = WebRTCCandidateStream()
+                for (offset, candidate) in candidates.enumerated() {
+                    let signed = try WebRTCCandidate.create(candidate: candidate, mid: description.mid!,
+                        sequence: offset + 1, session: sessions[index], description: description, signing: keys[index])
+                    let verified = try WebRTCCandidate(signed.message, session: sessions[1 - index],
+                                                      description: description)
+                    try stream.accept(verified)
+                    try await to.add(RTCIceCandidate(sdp: verified.candidate, sdpMLineIndex: 0, sdpMid: verified.mid))
+                }
+                let end = try WebRTCCandidate.create(candidate: "", mid: description.mid!, sequence: candidates.count + 1,
+                    session: sessions[index], description: description, signing: keys[index])
+                try stream.accept(WebRTCCandidate(end.message, session: sessions[1 - index], description: description))
+            }
+        }
         try await wait { a.connectionState == .connected && b.connectionState == .connected }
         let report = await a.statistics()
         precondition(report.statistics.values.contains {
             $0.type == "transport" && $0.values["dtlsState"] as? String == "connected"
         })
         precondition(verifiedOffer.sdp.contains("opus/48000/2"))
+        if trickle {
+            let pairID = report.statistics.values.first { $0.type == "transport" }!.values["selectedCandidatePairId"] as! String
+            let candidateID = report.statistics[pairID]!.values["localCandidateId"] as! String
+            precondition(report.statistics[candidateID]!.values["protocol"] as? String == "udp")
+            print("PASS trickle: delayed signed UDP candidates connect ICE/DTLS after five seconds; silent TURN=\(stalledTURN)")
+        }
         print("PASS WebRTC: signed audio SDP, ICE and DTLS connected; no microphone capture")
     }
 }

@@ -15,11 +15,17 @@ final class GroupStore: ObservableObject {
     @Published var preferWebRTC = false
     @Published private(set) var webRTCSupported = false
     private var qualitySupported = false
+    private var trickleSupported = false
     @Published private(set) var pendingLegacyCall: LegacyCallRequest?
     private var iceServers: [CallICEServer] = []
     private(set) var webRTCSignals: [WebRTCSignal] = []
+    private var localWebRTCSignals: [String: WebRTCSignal] = [:]
+    private(set) var webRTCCandidates: [WebRTCCandidate] = []
+    private var incomingICE: [String: WebRTCCandidateStream] = [:]
+    private var outgoingICE: [String: WebRTCCandidateStream] = [:]
     var onWebRTCSessionChanged: ((WebRTCSession?) -> Void)?
     var onWebRTCSignal: ((WebRTCSignal) -> Void)?
+    var onWebRTCCandidate: ((WebRTCCandidate) -> Void)?
     @Published private(set) var active = false
     @Published private(set) var online = false
     @Published private(set) var sending = false
@@ -84,7 +90,8 @@ final class GroupStore: ObservableObject {
     var usesWebRTC: Bool { (ownOffer ?? joining?.offer)?.usesWebRTC == true }
     var webRTCSession: WebRTCSession? {
         guard inCall, usesWebRTC, let offer = ownOffer ?? joining?.offer, let roster else { return nil }
-        return WebRTCSession(offer: offer, roster: roster, identity: ownIdentity, servers: iceServers)
+        return WebRTCSession(offer: offer, roster: roster, identity: ownIdentity, servers: iceServers,
+                             trickle: trickleSupported)
     }
     var memberLimit: Int { isIndividual ? 2 : 6 }
     var approving: String? { proposed?.message["revision"] }
@@ -160,6 +167,7 @@ final class GroupStore: ObservableObject {
                         try await relay.groupSend(["type": "direct-enable"])
                     }
                     webRTCSupported = relay.supportsWebRTC && webRTCAvailable
+                    trickleSupported = webRTCSupported && relay.supportsTrickle
                     if webRTCSupported { try await relay.groupSend(["type": "rtc-enable"]) }
                     qualitySupported = webRTCSupported && relay.supportsQuality
                     presenceSupported = relay.supportsPresence
@@ -227,6 +235,7 @@ final class GroupStore: ObservableObject {
         autoStart = false
         startTarget = nil; directCallsSupported = false
         webRTCSupported = false; qualitySupported = false; iceServers = []
+        trickleSupported = false
         status = message
         pushAvailable = false
         onDisconnected?()
@@ -257,7 +266,7 @@ final class GroupStore: ObservableObject {
         ephemeral = nil; roster = nil; proposed = nil; cipher = nil
         mixer.reset([])
         inCall = false
-        webRTCSignals = []
+        resetWebRTCSignals()
         onWebRTCSessionChanged?(nil)
         notification = nil
         status = message
@@ -521,11 +530,31 @@ final class GroupStore: ObservableObject {
 
     func mixedFrame() -> Data { mixer.mix() }
 
+    private func resetWebRTCSignals() {
+        webRTCSignals = []; localWebRTCSignals = [:]; webRTCCandidates = []
+        incomingICE = [:]; outgoingICE = [:]
+    }
+
     func sendWebRTC(sdp: String, kind: String, to: String, epoch: String) async throws {
         guard let session = webRTCSession, session.roster.message["epoch"] == epoch,
               let signing, let transport else { throw VoiceError.ended }
         let signal = try WebRTCSignal.create(sdp: sdp, kind: kind, to: to, session: session, signing: signing)
+        guard localWebRTCSignals[to] == nil else { throw VoiceError.packet }
+        localWebRTCSignals[to] = signal
         try await transport.groupSend(signal.message)
+    }
+
+    func sendWebRTCCandidate(candidate: String, mid: String, to: String, epoch: String) async throws {
+        guard let session = webRTCSession, session.trickle, session.roster.message["epoch"] == epoch,
+              let description = localWebRTCSignals[to],
+              webRTCSignals.contains(where: { $0.identity == to && $0.supportsTrickle }),
+              let signing, let transport else { throw VoiceError.ended }
+        var stream = outgoingICE[to] ?? WebRTCCandidateStream()
+        let update = try WebRTCCandidate.create(candidate: candidate, mid: mid, sequence: stream.sequence + 1,
+            session: session, description: description, signing: signing)
+        try stream.accept(update)
+        outgoingICE[to] = stream
+        try await transport.groupSend(update.message)
     }
 
     /// Best-effort, redacted media statistics for the relay operator. Older relays
@@ -552,6 +581,22 @@ final class GroupStore: ObservableObject {
                   webRTCSignals.count < 5 else { throw VoiceError.peer }
             webRTCSignals.append(signal)
             onWebRTCSignal?(signal)
+        case "rtc-candidate":
+            guard let session = webRTCSession else { return }
+            if message["call"] == session.offer.id,
+               let revision = message["revision"].flatMap(UInt64.init),
+               revision < session.roster.revision { return }
+            guard let sender = message["identity"],
+                  let description = webRTCSignals.first(where: { $0.identity == sender }),
+                  localWebRTCSignals[sender]?.supportsTrickle == true else { throw VoiceError.peer }
+            let update = try WebRTCCandidate(message, session: session, description: description)
+            guard update.recipient == ownIdentity else { throw VoiceError.peer }
+            var stream = incomingICE[sender] ?? WebRTCCandidateStream()
+            try stream.accept(update)
+            incomingICE[sender] = stream
+            guard webRTCCandidates.count < 5 * (WebRTCCandidate.limit + 1) else { throw VoiceError.packet }
+            webRTCCandidates.append(update)
+            onWebRTCCandidate?(update)
         case "presence":
             guard presenceSupported else { throw VoiceError.packet }
             let snapshot = try GroupPresenceSnapshot(message)
@@ -645,7 +690,7 @@ final class GroupStore: ObservableObject {
             deadline?.cancel(); deadline = nil
             let first = !inCall
             inCall = true
-            webRTCSignals = []
+            resetWebRTCSignals()
             onWebRTCSessionChanged?(webRTCSession)
             status = isIndividual ? "Encrypted individual call. Only the selected two devices can join."
                 : "Encrypted group call. \(members.count) participants. Later peers may request to join."

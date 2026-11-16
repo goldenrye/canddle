@@ -36,6 +36,20 @@ QUALITY_NUMBERS = {
 QUALITY_REQUIRED = {"to", "route", "secs", "rx_pps", "tx_pps", "rx_kbps", "tx_kbps", "muted"}
 SIGNAL_LIMIT = 32768
 SDP_LIMIT = 24000
+TRICKLE_ATTRIBUTE = "a=x-canddle-trickle:1"
+CANDIDATE_LIMIT = 64
+CANDIDATE_FIELDS = (
+    "call",
+    "revision",
+    "epoch",
+    "identity",
+    "to",
+    "description",
+    "sequence",
+    "mid",
+    "index",
+    "candidate",
+)
 TURN_URL = re.compile(
     r"(turns?):([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\]):([0-9]{1,5})"
     r"(?:\?transport=(udp|tcp))?"
@@ -44,6 +58,39 @@ TURN_URL = re.compile(
 
 def signal_fields(message):
     return [message[key] for key in ("call", "revision", "epoch", "identity", "to", "kind", "sdp")]
+
+
+def description_info(sdp):
+    lines = sdp.splitlines()
+    mids = [line[6:] for line in lines if line.startswith("a=mid:")]
+    trickle = TRICKLE_ATTRIBUTE in lines
+    if trickle and (
+        lines.count(TRICKLE_ATTRIBUTE) != 1
+        or len(mids) != 1
+        or not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", mids[0])
+    ):
+        raise ValueError("Invalid trickle description")
+    digest = base64.urlsafe_b64encode(hashlib.sha256(sdp.encode()).digest()).decode().rstrip("=")
+    return digest, mids[0] if len(mids) == 1 else None, trickle
+
+
+def validate_candidate(message):
+    if message["index"] != "0" or not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", message["mid"]):
+        raise ValueError("Invalid candidate media")
+    sequence = int(message["sequence"])
+    if str(sequence) != message["sequence"] or not 1 <= sequence <= CANDIDATE_LIMIT + 1:
+        raise ValueError("Invalid candidate sequence")
+    candidate = message["candidate"]
+    # One printable candidate line only, never arbitrary SDP attributes. The
+    # authenticated native ICE parser validates the remaining candidate grammar.
+    if candidate and (
+        len(candidate.encode()) > 2048
+        or not all(32 <= ord(c) <= 126 for c in candidate)
+        or not re.fullmatch(r"candidate:[A-Za-z0-9+/]+ 1 (?:udp|tcp|UDP|TCP) .+", candidate)
+        or sequence > CANDIDATE_LIMIT
+    ):
+        raise ValueError("Invalid ICE candidate")
+    return sequence
 
 
 def validate_sdp(sdp):
@@ -63,6 +110,7 @@ def validate_sdp(sdp):
         or not any(re.fullmatch(r"a=rtpmap:[0-9]+ opus/48000/2", line) for line in lines)
     ):
         raise ValueError("WebRTC requires fingerprint-authenticated Opus audio")
+    description_info(sdp)
 
 
 def pseudonym(value):

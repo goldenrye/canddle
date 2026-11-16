@@ -512,7 +512,7 @@ struct GroupChecks {
         let host = clients[0], receiver = clients[1], legacy = clients[6]
         let sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtcp-mux\r\n"
             + "a=rtpmap:111 opus/48000/2\r\na=fingerprint:sha-256 "
-            + Array(repeating: "AB", count: 32).joined(separator: ":") + "\r\n"
+            + Array(repeating: "AB", count: 32).joined(separator: ":") + "\r\na=mid:0\r\n"
         for client in clients.prefix(6) { client.webRTCAvailable = true }
         host.preferWebRTC = true
         receiver.connect(settings)
@@ -587,6 +587,7 @@ struct GroupChecks {
         precondition(changes == count - 1)
         try await wait { clients.prefix(count).allSatisfy { $0.members.count == count } }
         let session = host.webRTCSession!
+        precondition(session.trickle == (mode != "rtc-no-trickle"))
         let signing = try Curve25519.Signing.PrivateKey(rawRepresentation: saved[0].secret)
         let proof = try WebRTCSignal.create(sdp: sdp,
             kind: host.ownIdentity < receiver.ownIdentity ? "offer" : "answer",
@@ -598,12 +599,39 @@ struct GroupChecks {
         }
         for from in clients.prefix(count) {
             for to in clients.prefix(count) where from !== to {
-                try await from.sendWebRTC(sdp: sdp,
+                let supportsTrickle = session.trickle && !(mode == "rtc-mixed" && from === receiver)
+                try await from.sendWebRTC(sdp: sdp + (supportsTrickle ? WebRTCSignal.trickleAttribute + "\r\n" : ""),
                     kind: from.ownIdentity < to.ownIdentity ? "offer" : "answer",
                     to: to.ownIdentity, epoch: session.roster.message["epoch"]!)
             }
         }
         try await wait { clients.prefix(count).allSatisfy { $0.webRTCSignals.count == count - 1 } }
+        for from in clients.prefix(count) {
+            for to in clients.prefix(count) where from !== to {
+                let enabled = session.trickle && !(mode == "rtc-mixed" && (from === receiver || to === receiver))
+                if enabled {
+                    try await from.sendWebRTCCandidate(
+                        candidate: "candidate:1 1 udp 2122260223 192.0.2.1 54321 typ host",
+                        mid: "0", to: to.ownIdentity, epoch: session.roster.message["epoch"]!)
+                    try await from.sendWebRTCCandidate(candidate: "", mid: "0", to: to.ownIdentity,
+                                                      epoch: session.roster.message["epoch"]!)
+                } else {
+                    var rejected = false
+                    do {
+                        try await from.sendWebRTCCandidate(candidate: "", mid: "0", to: to.ownIdentity,
+                                                          epoch: session.roster.message["epoch"]!)
+                    } catch { rejected = true }
+                    precondition(rejected)
+                }
+            }
+        }
+        try await wait {
+            clients.prefix(count).allSatisfy { client in
+                let peers = session.trickle && !(mode == "rtc-mixed" && client === receiver)
+                    ? count - (mode == "rtc-mixed" ? 2 : 1) : 0
+                return client.webRTCCandidates.count == peers * 2
+            }
+        }
         for client in clients.prefix(count) {
             precondition(client.usesWebRTC && client.mixedFrame() == VoiceProtocol.silence)
         }
@@ -613,6 +641,7 @@ struct GroupChecks {
             try await wait { !receiver.inCall && host.members.count == count - 1 }
             precondition(receiver.webRTCSession == nil && receiver.webRTCSignals.isEmpty)
             precondition(host.webRTCSignals.isEmpty)
+            precondition(host.webRTCCandidates.isEmpty && receiver.webRTCCandidates.isEmpty)
             try rejects { _ = try WebRTCSignal(proof.message, session: host.webRTCSession!) }
         }
         host.cancelRequest()

@@ -35,6 +35,7 @@ struct WebRTCSession {
     let roster: GroupRoster
     let identity: String
     let servers: [CallICEServer]
+    var trickle = false
 }
 
 enum WebRTCSetupStage: String {
@@ -115,11 +116,19 @@ struct WebRTCSetupProgress {
 /// exact admitted pair and fresh roster epoch. No unauthenticated SDP reaches WebRTC.
 struct WebRTCSignal {
     static let maximumSize = 32768
+    static let trickleAttribute = "a=x-canddle-trickle:1"
     let message: [String: String]
     var identity: String { message["identity"]! }
     var recipient: String { message["to"]! }
     var kind: String { message["kind"]! }
     var sdp: String { message["sdp"]! }
+    var supportsTrickle: Bool { sdp.components(separatedBy: .newlines).contains(Self.trickleAttribute) }
+    var digest: String { VoiceProtocol.base64(Data(SHA256.hash(data: Data(sdp.utf8)))) }
+    var mid: String? {
+        sdp.components(separatedBy: .newlines).first(where: { $0.hasPrefix("a=mid:") }).map {
+            String($0.dropFirst(6))
+        }
+    }
 
     private static let fields = ["call", "revision", "epoch", "identity", "to", "kind", "sdp"]
 
@@ -159,6 +168,12 @@ struct WebRTCSignal {
         let lines = sdp.components(separatedBy: .newlines).filter { !$0.isEmpty }
         let media = lines.filter { $0.hasPrefix("m=") }
         let fingerprints = lines.filter { $0.hasPrefix("a=fingerprint:") }
+        if lines.contains(trickleAttribute) {
+            let mids = lines.filter { $0.hasPrefix("a=mid:") }
+            guard lines.filter({ $0 == trickleAttribute }).count == 1, mids.count == 1,
+                  String(mids[0].dropFirst(6)).range(of: #"^[A-Za-z0-9_.-]{1,32}$"#,
+                      options: .regularExpression) != nil else { throw VoiceError.packet }
+        }
         guard media.count == 1,
               media[0].range(of: #"^m=audio [0-9]+ UDP/TLS/RTP/SAVPF( [0-9]+)+$"#,
                              options: .regularExpression) != nil,
@@ -170,6 +185,78 @@ struct WebRTCSignal {
                                                options: .regularExpression) != nil }) else {
             throw VoiceError.packet
         }
+    }
+}
+
+/// Each update authenticates its exact SDP as well as its admitted pair/epoch.
+struct WebRTCCandidate {
+    static let limit = 64
+    private static let fields = [
+        "call", "revision", "epoch", "identity", "to", "description", "sequence", "mid", "index", "candidate"
+    ]
+    let message: [String: String]
+    var identity: String { message["identity"]! }
+    var recipient: String { message["to"]! }
+    var candidate: String { message["candidate"]! }
+    var mid: String { message["mid"]! }
+    var sequence: Int { Int(message["sequence"]!)! }
+    var ended: Bool { candidate.isEmpty }
+
+    init(_ message: [String: String], session: WebRTCSession, description: WebRTCSignal) throws {
+        guard session.trickle, description.supportsTrickle,
+              Set(message.keys) == Set(Self.fields + ["type", "signature"]),
+              message["type"] == "rtc-candidate",
+              message["call"] == session.offer.id,
+              message["revision"] == String(session.roster.revision),
+              message["epoch"] == session.roster.message["epoch"],
+              description.message["call"] == message["call"],
+              description.message["revision"] == message["revision"],
+              description.message["epoch"] == message["epoch"],
+              message["identity"] == description.identity, message["to"] == description.recipient,
+              description.identity != description.recipient,
+              session.roster.members.contains(where: { $0.id == description.identity }),
+              session.roster.members.contains(where: { $0.id == description.recipient }),
+              description.identity == session.identity || description.recipient == session.identity,
+              message["description"] == description.digest, message["mid"] == description.mid,
+              message["index"] == "0", let raw = message["candidate"],
+              let sequence = message["sequence"].flatMap(Int.init),
+              String(sequence) == message["sequence"], (1...Self.limit + 1).contains(sequence)
+        else { throw VoiceError.peer }
+        if !raw.isEmpty {
+            guard sequence <= Self.limit, raw.utf8.count <= 2048,
+                  raw.unicodeScalars.allSatisfy({ (32...126).contains($0.value) }),
+                  raw.range(of: #"^candidate:[A-Za-z0-9+/]+ 1 (udp|tcp|UDP|TCP) .+$"#,
+                            options: .regularExpression) != nil else { throw VoiceError.packet }
+        }
+        try LobbyProtocol.verify(description.identity, message["signature"]!,
+            LobbyProtocol.transcript("rtc-candidate", Self.fields.map { message[$0]! }))
+        self.message = message
+    }
+
+    static func create(candidate: String, mid: String, sequence: Int, session: WebRTCSession,
+                       description: WebRTCSignal, signing: Curve25519.Signing.PrivateKey) throws -> Self {
+        var message = [
+            "type": "rtc-candidate", "call": session.offer.id,
+            "revision": String(session.roster.revision), "epoch": session.roster.message["epoch"]!,
+            "identity": VoiceProtocol.base64(signing.publicKey.rawRepresentation),
+            "to": description.recipient, "description": description.digest,
+            "sequence": String(sequence), "mid": mid, "index": "0", "candidate": candidate
+        ]
+        message["signature"] = VoiceProtocol.base64(try signing.signature(for:
+            LobbyProtocol.transcript("rtc-candidate", fields.map { message[$0]! })))
+        return try Self(message, session: session, description: description)
+    }
+}
+
+/// Ordered WebSocket delivery lets us reject replay/gaps with constant-size state.
+struct WebRTCCandidateStream {
+    private(set) var sequence = 0
+    private(set) var ended = false
+
+    mutating func accept(_ update: WebRTCCandidate) throws {
+        guard !ended, update.sequence == sequence + 1 else { throw VoiceError.packet }
+        sequence = update.sequence
+        ended = update.ended
     }
 }
 

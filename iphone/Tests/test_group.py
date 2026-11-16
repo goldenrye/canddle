@@ -44,6 +44,8 @@ TOKEN = "group-test-" + "a" * 40
         "direct-disconnect",
         "rtc-group",
         "rtc-direct",
+        "rtc-mixed",
+        "rtc-no-trickle",
         "rtc-legacy-relay",
         "rtc-legacy-cold-start",
         "rtc-legacy-direct",
@@ -52,10 +54,15 @@ TOKEN = "group-test-" + "a" * 40
 async def test_native_group(mode, tmp_path):
     turn = (
         TURNConfig(("turn:turn.example:3478",), "test-only-secret-" * 3)
-        if mode in {"rtc-group", "rtc-direct"}
+        if mode in {"rtc-group", "rtc-direct", "rtc-mixed", "rtc-no-trickle"}
         else None
     )
     relay = Relay(TOKEN, turn=turn)
+    if mode == "rtc-no-trickle":
+        original_challenge = relay.group.challenge
+        relay.group.challenge = lambda nonce: {
+            key: value for key, value in original_challenge(nonce).items() if key != "trickle"
+        }
     if mode == "legacy-presence":
         relay.group.challenge = lambda nonce: {"type": "challenge", "challenge": nonce}
     relay.group.lifetime = 1.5 if mode == "ignore" else 120

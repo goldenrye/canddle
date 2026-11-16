@@ -66,6 +66,8 @@ class Peer:
     media_last: float = field(default_factory=time.monotonic)
     direct_calls: bool = False
     webrtc: bool = False
+    ice_allowance: float = 512
+    ice_last: float = field(default_factory=time.monotonic)
 
     def emit(self, message):
         try:

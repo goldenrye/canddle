@@ -167,12 +167,36 @@ ICE credentials and candidates) is signed before use by WebRTC. This binds
 DTLS-SRTP endpoints to the existing verified identity/admission chain.
 
 SDP is audio-only, uses DTLS/SRTP with a SHA-256 fingerprint and Opus, and is
-limited to 24000 UTF-8 bytes within a 32768-byte JSON frame. Non-trickle ICE
+limited to 24000 UTF-8 bytes within a 32768-byte JSON frame. Signaling
 allows one description per directed pair per epoch (at most five per client).
 This separate budget avoids relaxing the ordinary control-frame token bucket;
 stale descriptions are dropped under the ordinary rate budget. Replay,
 non-members and future/mismatched epochs are rejected. PCM frames are forbidden
 in WebRTC calls. There is no video, data channel, recording or SDP event logging.
+
+Trickle ICE requires the relay's `trickle=1` capability and the signed SDP
+attribute `a=x-canddle-trickle:1` from both peers. Older peers retain SDP-only
+negotiation; no candidate updates are sent to them. The relay capability controls
+availability, not identity trust. A malicious relay can suppress it but cannot
+forge the signed SDP or candidate updates.
+
+Each `rtc-candidate` message signs the string fields `call`, `revision`, `epoch`,
+`identity`, `to`, `description`, `sequence`, `mid`, `index`, `candidate` in that
+order under the `rtc-candidate` transcript purpose. `description` is unpadded
+base64url SHA-256 of the sender's exact signed SDP. The single audio media index
+is `0`; `mid` must match that SDP. Nonempty candidates are printable single lines,
+at most 2048 UTF-8 bytes inside an 8192-byte control frame. The native ICE parser
+validates candidate grammar after identity, admission, description and epoch checks.
+
+Each directed pair/epoch permits sequences 1-64 for candidates and one final
+empty-candidate end marker (at most sequence 65). Sequences must be consecutive;
+replay, gaps, updates after end, unadmitted senders, wrong recipients and future
+or mismatched epochs are rejected by both relay and clients. Clients retain at
+most 65 updates per remote peer while media starts. The relay uses a separate
+per-connection bucket (512 burst, 64 updates/second refill), including for stale
+updates. Stale candidates and candidates during a membership pause are discarded.
+All candidate sequences, queues and description bindings are reset on a new
+signed roster or call teardown. Candidates and their addresses are not logged.
 
 On each authenticated roster change, every old peer connection is closed and
 new ICE credentials/certificates are created, including between remaining
