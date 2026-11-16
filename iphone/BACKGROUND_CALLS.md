@@ -5,6 +5,13 @@ VoIP pushes for new group and individual calls. An idle app closes its WebSocket
 background; Apple push wakes it and presents the native incoming-call screen.
 Accepted CallKit audio sessions can continue with the screen locked.
 
+WebRTC audio uses the same PushKit/CallKit flow; it does not itself wake a
+suspended app. Keep APNs enabled and include the push deployment override when
+adding [WebRTC/TURN](WEBRTC.md). After upgrading, open every receiving app once
+to refresh its push capability registration. WebRTC offers are pushed only to
+registered WebRTC-capable devices, and microphone/audio startup remains gated
+by explicit answer, authenticated admission, permission and CallKit activation.
+
 ## Enable on iPhone
 
 1. Use a paid Apple Developer team and an explicit App ID with Push Notifications

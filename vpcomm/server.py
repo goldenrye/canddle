@@ -22,6 +22,8 @@ from .group import GroupLobby
 from .lobby import Lobby, name_valid, transcript, verify
 from .pairing import PairingCodes, admin_socket
 from .push import from_environment
+from .webrtc import SIGNAL_LIMIT
+from .webrtc import from_environment as turn_from_environment
 
 LOG = logging.getLogger("vpcomm")
 ROOM_PATTERN = re.compile(r"[A-Za-z0-9_-]{22}")
@@ -44,6 +46,7 @@ class Relay:
         call_timeout: float = 3600,
         pairing: PairingCodes | None = None,
         push=None,
+        turn=None,
     ):
         if len(access_token) < 32 or not access_token.isascii():
             raise ValueError("Access token must be at least 32 ASCII characters")
@@ -57,7 +60,7 @@ class Relay:
         self.connections = 0
         self.pairing = pairing
         self.lobby = Lobby()
-        self.group = GroupLobby(push=push)
+        self.group = GroupLobby(push=push, turn=turn)
 
     def authorize(self, connection, request):
         if request.path == "/pair":
@@ -217,7 +220,7 @@ def build_server(relay: Relay, host: str, port: int):
         host,
         port,
         process_request=relay.authorize,
-        max_size=8192,
+        max_size=SIGNAL_LIMIT,
         max_queue=4,
         write_limit=8192,
         compression=None,
@@ -245,6 +248,7 @@ async def run(args):
         call_timeout=args.call_timeout,
         pairing=pairing,
         push=push,
+        turn=turn_from_environment(),
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

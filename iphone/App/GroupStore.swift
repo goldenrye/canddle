@@ -6,6 +6,13 @@ import Foundation
 final class GroupStore: ObservableObject {
     @Published var name = "My iPhone"
     @Published var autoAcceptVerifiedDevices = false
+    var webRTCAvailable = false
+    @Published var preferWebRTC = false
+    @Published private(set) var webRTCSupported = false
+    private var iceServers: [CallICEServer] = []
+    private(set) var webRTCSignals: [WebRTCSignal] = []
+    var onWebRTCSessionChanged: ((WebRTCSession?) -> Void)?
+    var onWebRTCSignal: ((WebRTCSignal) -> Void)?
     @Published private(set) var active = false
     @Published private(set) var online = false
     @Published private(set) var sending = false
@@ -67,6 +74,11 @@ final class GroupStore: ObservableObject {
     var waiting: Bool { ownOffer != nil || joining != nil }
     var isCaller: Bool { ownOffer != nil }
     var isIndividual: Bool { (ownOffer ?? joining?.offer)?.target != nil }
+    var usesWebRTC: Bool { (ownOffer ?? joining?.offer)?.usesWebRTC == true }
+    var webRTCSession: WebRTCSession? {
+        guard inCall, usesWebRTC, let offer = ownOffer ?? joining?.offer, let roster else { return nil }
+        return WebRTCSession(offer: offer, roster: roster, identity: ownIdentity, servers: iceServers)
+    }
     var memberLimit: Int { isIndividual ? 2 : 6 }
     var approving: String? { proposed?.message["revision"] }
     var ownIdentity: String { signing.map { VoiceProtocol.base64($0.publicKey.rawRepresentation) } ?? "" }
@@ -141,6 +153,8 @@ final class GroupStore: ObservableObject {
                     if directCallsSupported {
                         try await relay.groupSend(["type": "direct-enable"])
                     }
+                    webRTCSupported = relay.supportsWebRTC && webRTCAvailable
+                    if webRTCSupported { try await relay.groupSend(["type": "rtc-enable"]) }
                     presenceSupported = relay.supportsPresence
                     if presenceSupported {
                         try await relay.groupSend(["type": "presence-subscribe"])
@@ -174,8 +188,12 @@ final class GroupStore: ObservableObject {
                             cipher = current
                             if let (sender, frame) = frame { try mixer.push(frame, from: sender) }
                         case .string(let text):
-                            guard text.utf8.count <= 8192 else { throw VoiceError.packet }
-                            try receive(JSONDecoder().decode([String: String].self, from: Data(text.utf8)))
+                            guard text.utf8.count <= WebRTCSignal.maximumSize else { throw VoiceError.packet }
+                            let message = try JSONDecoder().decode([String: String].self, from: Data(text.utf8))
+                            guard message["type"] == "rtc-signal" || text.utf8.count <= 8192 else {
+                                throw VoiceError.packet
+                            }
+                            try receive(message)
                         @unknown default: throw VoiceError.packet
                         }
                     }
@@ -200,6 +218,7 @@ final class GroupStore: ObservableObject {
         presence = [:]; presenceReady = false; presenceSupported = false; presenceTruncated = false
         autoStart = false
         startTarget = nil; directCallsSupported = false
+        webRTCSupported = false; iceServers = []
         status = message
         pushAvailable = false
         onDisconnected?()
@@ -229,6 +248,8 @@ final class GroupStore: ObservableObject {
         ephemeral = nil; roster = nil; proposed = nil; cipher = nil
         mixer.reset([])
         inCall = false
+        webRTCSignals = []
+        onWebRTCSessionChanged?(nil)
         notification = nil
         status = message
         if hadAudio { onAudioEnded?(message) }
@@ -272,12 +293,16 @@ final class GroupStore: ObservableObject {
 
     func announce(target: String? = nil) {
         guard online, !waiting, !inCall, !sending, let signing else { return }
+        guard !preferWebRTC || webRTCSupported else {
+            status = "Enable WebRTC/TURN on the relay, or turn off WebRTC audio in Settings."; return
+        }
         guard target == nil || directCallsSupported else {
             status = "Upgrade the relay to make individual calls."; return
         }
         do {
             let key = Curve25519.KeyAgreement.PrivateKey()
-            let offer = try LobbyOffer.create(identity: signing, name: sessionName, ephemeral: key, target: target)
+            let offer = try LobbyOffer.create(identity: signing, name: sessionName, ephemeral: key,
+                                              target: target, webRTC: preferWebRTC)
             ephemeral = key; ownOffer = offer
             members = [GroupMember(message: offer.message)]
             status = target == nil
@@ -290,6 +315,7 @@ final class GroupStore: ObservableObject {
 
     func request(_ offer: LobbyOffer) {
         guard online, !waiting, !inCall, !sending, let signing,
+              !offer.usesWebRTC || webRTCSupported,
               offer.target == nil || offer.target == ownIdentity,
               offers.contains(where: { $0.id == offer.id }) else { return }
         do {
@@ -466,8 +492,29 @@ final class GroupStore: ObservableObject {
 
     func mixedFrame() -> Data { mixer.mix() }
 
+    func sendWebRTC(sdp: String, kind: String, to: String, epoch: String) async throws {
+        guard let session = webRTCSession, session.roster.message["epoch"] == epoch,
+              let signing, let transport else { throw VoiceError.ended }
+        let signal = try WebRTCSignal.create(sdp: sdp, kind: kind, to: to, session: session, signing: signing)
+        try await transport.groupSend(signal.message)
+    }
+
     private func receive(_ message: [String: String]) throws {
         switch message["type"] {
+        case "rtc-config":
+            guard webRTCSupported else { throw VoiceError.packet }
+            iceServers = try CallICEServer.parse(message)
+        case "rtc-signal":
+            guard let session = webRTCSession else { return }
+            if message["call"] == session.offer.id,
+               let revision = message["revision"].flatMap(UInt64.init),
+               revision < session.roster.revision { return }
+            let signal = try WebRTCSignal(message, session: session)
+            guard signal.recipient == ownIdentity,
+                  !webRTCSignals.contains(where: { $0.identity == signal.identity }),
+                  webRTCSignals.count < 5 else { throw VoiceError.peer }
+            webRTCSignals.append(signal)
+            onWebRTCSignal?(signal)
         case "presence":
             guard presenceSupported else { throw VoiceError.packet }
             let snapshot = try GroupPresenceSnapshot(message)
@@ -488,7 +535,7 @@ final class GroupStore: ObservableObject {
                         try await transport.groupSend([
                             "type": "push-register", "token": pushToken,
                             "environment": pushEnvironment, "scope": scope
-                        ])
+                        ].merging(webRTCSupported ? ["media": "webrtc"] : [:]) { _, new in new })
                     } catch { pushStatus = "Push registration failed. Reconnect to retry." }
                 }
             } else { pushStatus = "This relay has not enabled background ringing." }
@@ -500,6 +547,7 @@ final class GroupStore: ObservableObject {
         case "offer":
             let offer = try LobbyOffer(message)
             if offer.identity == ownIdentity { return }
+            guard !offer.usesWebRTC || webRTCSupported else { throw VoiceError.peer }
             guard offer.target == nil || (directCallsSupported && offer.target == ownIdentity) else {
                 throw VoiceError.peer
             }
@@ -542,7 +590,12 @@ final class GroupStore: ObservableObject {
                     clearCall("The caller removed you from the call."); return
                 }
             }
-            cipher = try GroupCipher(roster: next, identity: ownIdentity, ephemeral: ephemeral)
+            if offer.usesWebRTC {
+                guard webRTCSupported, !iceServers.isEmpty else { throw VoiceError.peer }
+                cipher = nil
+            } else {
+                cipher = try GroupCipher(roster: next, identity: ownIdentity, ephemeral: ephemeral)
+            }
             let joinedNames = next.members.filter { nextMember in
                 nextMember.id != ownIdentity && !members.contains { $0.id == nextMember.id }
             }.map { trustedName($0.id) ?? $0.name }
@@ -555,6 +608,8 @@ final class GroupStore: ObservableObject {
             deadline?.cancel(); deadline = nil
             let first = !inCall
             inCall = true
+            webRTCSignals = []
+            onWebRTCSessionChanged?(webRTCSession)
             status = isIndividual ? "Encrypted individual call. Only the selected two devices can join."
                 : "Encrypted group call. \(members.count) participants. Later peers may request to join."
             if announceJoin && !joinedNames.isEmpty {

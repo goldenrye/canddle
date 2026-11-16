@@ -7,6 +7,7 @@ import pytest
 from test_interop import tls_fixture
 
 from vpcomm.server import Relay, build_server
+from vpcomm.webrtc import TURNConfig
 
 PROBE = os.environ.get("VPCOMM_GROUP_PROBE")
 pytestmark = pytest.mark.skipif(not PROBE, reason="Compile GroupChecks.swift")
@@ -41,10 +42,18 @@ TOKEN = "group-test-" + "a" * 40
         "direct-decline",
         "direct-lock-decline",
         "direct-disconnect",
+        "rtc-group",
+        "rtc-direct",
+        "rtc-legacy-relay",
     ],
 )
 async def test_native_group(mode, tmp_path):
-    relay = Relay(TOKEN)
+    turn = (
+        TURNConfig(("turn:turn.example:3478",), "test-only-secret-" * 3)
+        if mode in {"rtc-group", "rtc-direct"}
+        else None
+    )
+    relay = Relay(TOKEN, turn=turn)
     if mode == "legacy-presence":
         relay.group.challenge = lambda nonce: {"type": "challenge", "challenge": nonce}
     relay.group.lifetime = 1.5 if mode == "ignore" else 120

@@ -82,6 +82,32 @@ final class InterfaceTests: XCTestCase {
         XCTAssertEqual(toggle.value as? String, original)
     }
 
+    @MainActor func testWebRTCAudioPreferencePersists() {
+        let app = XCUIApplication()
+        app.launch()
+        settings(app)
+        let toggle = app.switches["useWebRTCAudio"]
+        for _ in 0..<8 {
+            if toggle.exists && toggle.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(toggle.isHittable)
+        let original = toggle.value as? String
+        toggle.tap()
+        let changed = toggle.value as? String
+        XCTAssertNotEqual(original, changed)
+        app.terminate()
+        app.launch()
+        settings(app)
+        for _ in 0..<8 {
+            if toggle.exists && toggle.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertEqual(toggle.value as? String, changed)
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, original)
+    }
+
     @MainActor func testSettingsShowsVersionAndAccessibleSaveIcon() {
         let app = XCUIApplication()
         app.launch()

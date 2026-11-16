@@ -18,7 +18,8 @@ struct LobbyView: View {
                 .accessibilityIdentifier("lobbyAnnounce")
                 .disabled(lobby.sending || (lobby.active && !lobby.online))
             } footer: {
-                Text("Invite everyone on this relay.")
+                Text(lobby.preferWebRTC ? "WebRTC audio. Only updated apps can join."
+                     : "Legacy audio over TCP. Compatible with older apps.")
             }
             if lobby.online && !lobby.offers.isEmpty {
                 Section("Available calls") {
@@ -26,6 +27,8 @@ struct LobbyView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             peer(offer.identity, name: offer.name)
                             Text(offer.target == nil ? "Group call" : "Individual call")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(offer.usesWebRTC ? "WebRTC / Opus" : "Legacy / TCP")
                                 .font(.caption).foregroundStyle(.secondary)
                             HStack {
                                 Button(offer.target == nil ? "Join group call" : "Answer") { lobby.request(offer) }

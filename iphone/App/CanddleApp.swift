@@ -263,6 +263,15 @@ struct RelaySettingsView: View {
                          + "They are not synced through iCloud.")
                 }.disabled(call.busy || lobby.active)
                 Section {
+                    Toggle("Use WebRTC audio", isOn: $call.useWebRTCAudio)
+                        .accessibilityIdentifier("useWebRTCAudio")
+                } header: {
+                    Text("Audio transport")
+                } footer: {
+                    Text("New calls use Opus with WebRTC. Requires updated apps and TURN setup on the relay. "
+                         + "Turn off to start legacy-compatible calls. Incoming calls keep their announced audio mode.")
+                }.disabled(call.busy || lobby.waiting)
+                Section {
                     Toggle("Auto-accept verified family devices", isOn: $call.autoAcceptVerifiedDevices)
                         .accessibilityIdentifier("autoAcceptVerifiedDevices")
                         .disabled(call.busy || lobby.waiting)
@@ -321,6 +330,12 @@ struct RelaySettingsView: View {
                         .accessibilityLabel("Version")
                         .accessibilityValue(appVersion)
                         .accessibilityIdentifier("appVersion")
+                    DisclosureGroup("WebRTC license") {
+                        Text(Bundle.main.url(forResource: "WebRTC-LICENSE", withExtension: "txt")
+                            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+                            ?? "WebRTC license unavailable in this build.")
+                            .font(.caption).textSelection(.enabled)
+                    }
                 }
             }
             .navigationTitle("Settings")

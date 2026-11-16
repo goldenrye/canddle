@@ -91,6 +91,11 @@ struct GroupChecks {
             precondition(!clients[1].active)
             defer { clients.forEach { $0.disconnect() } }
             let host = clients[0]
+            if input.mode.hasPrefix("rtc-") {
+                try await webRTCChecks(clients, saved: saved, settings: settings, mode: input.mode)
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode == "rename-directory" {
                 try await directoryRenameChecks(clients, settings: settings)
                 print("PASS group \(input.mode)")
@@ -500,6 +505,90 @@ struct GroupChecks {
         for _ in 0..<3 { precondition(mixer.mix() == pcm(32767)) }
         for _ in 0..<5 { precondition(mixer.mix() == pcm(20000)) }
         precondition(mixer.mix() == VoiceProtocol.silence)
+    }
+
+    @MainActor static func webRTCChecks(_ clients: [GroupStore], saved: [LobbyIdentity],
+                                        settings: RelaySettings, mode: String) async throws {
+        let host = clients[0], receiver = clients[1], legacy = clients[6]
+        let sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtcp-mux\r\n"
+            + "a=rtpmap:111 opus/48000/2\r\na=fingerprint:sha-256 "
+            + Array(repeating: "AB", count: 32).joined(separator: ":") + "\r\n"
+        for client in clients.prefix(6) { client.webRTCAvailable = true }
+        host.preferWebRTC = true
+        receiver.connect(settings)
+        legacy.connect(settings)
+        host.connect(settings)
+        try await wait { host.online && receiver.presenceReady && legacy.presenceReady }
+        if mode == "rtc-legacy-relay" {
+            host.announce()
+            precondition(host.ownOffer == nil && !host.webRTCSupported)
+            host.preferWebRTC = false
+            host.announce()
+            try await wait { receiver.offers.count == 1 && legacy.offers.count == 1 }
+            precondition(!receiver.offers[0].usesWebRTC)
+            return
+        }
+        try await wait { host.webRTCSupported && receiver.webRTCSupported }
+        host.announce(target: mode == "rtc-direct" ? receiver.ownIdentity : nil)
+        try await wait { receiver.offers.count == 1 && !host.sending }
+        let offer = receiver.offers[0]
+        precondition(offer.usesWebRTC && legacy.offers.isEmpty)
+        let push = try IncomingCallPush([
+            "v": 1, "scope": settings.url.absoluteString, "recipient": receiver.ownIdentity,
+            "expires": Date().timeIntervalSince1970 + 30, "offer": offer.message
+        ], scope: settings.url.absoluteString, recipient: receiver.ownIdentity)
+        precondition(push.offer.message == offer.message)
+        var stripped = offer.message
+        stripped.removeValue(forKey: "media")
+        try rejects { _ = try LobbyOffer(stripped) }
+        var changes = 0
+        host.onWebRTCSessionChanged = { if $0 != nil { changes += 1 } }
+        let count = mode == "rtc-direct" ? 2 : 6
+        for index in 1..<count {
+            let client = clients[index]
+            if index > 1 { client.connect(settings) }
+            try await wait { client.offers.count == 1 && !client.sending }
+            client.request(client.offers[0])
+            try await wait { host.candidates.count == 1 && !client.sending }
+            precondition(!client.inCall && client.webRTCSession == nil)
+            client.confirmCaller()
+            try await wait { host.candidates[0].confirmed && !host.sending }
+            host.approve(host.candidates[0])
+            try await wait { client.inCall && host.members.count == index + 1 && !host.sending }
+        }
+        precondition(changes == count - 1)
+        try await wait { clients.prefix(count).allSatisfy { $0.members.count == count } }
+        let session = host.webRTCSession!
+        let signing = try Curve25519.Signing.PrivateKey(rawRepresentation: saved[0].secret)
+        let proof = try WebRTCSignal.create(sdp: sdp,
+            kind: host.ownIdentity < receiver.ownIdentity ? "offer" : "answer",
+            to: receiver.ownIdentity, session: session, signing: signing)
+        for field in ["identity", "to", "epoch", "revision", "call", "kind", "sdp", "signature"] {
+            var tampered = proof.message
+            tampered[field] = "invalid"
+            try rejects { _ = try WebRTCSignal(tampered, session: receiver.webRTCSession!) }
+        }
+        for from in clients.prefix(count) {
+            for to in clients.prefix(count) where from !== to {
+                try await from.sendWebRTC(sdp: sdp,
+                    kind: from.ownIdentity < to.ownIdentity ? "offer" : "answer",
+                    to: to.ownIdentity, epoch: session.roster.message["epoch"]!)
+            }
+        }
+        try await wait { clients.prefix(count).allSatisfy { $0.webRTCSignals.count == count - 1 } }
+        for client in clients.prefix(count) {
+            precondition(client.usesWebRTC && client.mixedFrame() == VoiceProtocol.silence)
+        }
+        precondition(legacy.offers.isEmpty)
+        if mode == "rtc-group" {
+            host.remove(host.members.first { $0.id == receiver.ownIdentity }!)
+            try await wait { !receiver.inCall && host.members.count == count - 1 }
+            precondition(receiver.webRTCSession == nil && receiver.webRTCSignals.isEmpty)
+            precondition(host.webRTCSignals.isEmpty)
+            try rejects { _ = try WebRTCSignal(proof.message, session: host.webRTCSession!) }
+        }
+        host.cancelRequest()
+        try await wait { clients.prefix(count).allSatisfy { !$0.inCall } }
     }
 
     static func jitterChecks() throws {

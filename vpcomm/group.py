@@ -6,14 +6,18 @@ import time
 
 from .crypto import decode, encode
 from .lobby import Lobby, offer_fields, transcript, verify
+from .webrtc import SIGNAL_LIMIT, signal_fields, validate_sdp
 
 
 class GroupLobby(Lobby):
     MAX_MEMBERS = 6
 
-    def __init__(self, push=None, **kwargs):
+    def __init__(self, push=None, turn=None, **kwargs):
         super().__init__(**kwargs)
         self.push = push
+        self.turn = turn
+        self.epochs = {}
+        self.rtc_signals = {}
         self.members = {}
         self.revisions = {}
         self.paused = set()
@@ -22,19 +26,47 @@ class GroupLobby(Lobby):
         self.presence_update = None
 
     def challenge(self, nonce):
-        return {**super().challenge(nonce), "presence": "1", "direct": "1"}
+        return {
+            **super().challenge(nonce),
+            "presence": "1",
+            "direct": "1",
+            **({"webrtc": "1"} if self.turn else {}),
+        }
 
     def visible_offer(self, offer, peer):
+        if offer.message.get("media") == "webrtc" and not peer.webrtc:
+            return False
         target = offer.message.get("target")
         return target is None or (
             peer.direct_calls and peer.identity in {offer.owner.identity, target}
         )
 
     def validate_offer(self, peer, message):
+        if "media" in message:
+            expected = {"type", "call", "identity", "ephemeral", "name", "signature", "media"}
+            if "target" in message:
+                expected.add("target")
+                decode(message["target"], 32)
+                if not peer.direct_calls or message["target"] == peer.identity:
+                    raise ValueError("Invalid individual recipient")
+            if not peer.webrtc or message["media"] != "webrtc" or set(message) != expected:
+                raise ValueError("Invalid WebRTC offer")
+            decode(message["call"], 16)
+            decode(message["ephemeral"], 32)
+            self.check_sender(peer, message)
+            purpose = "webrtc-direct-offer" if "target" in message else "webrtc-offer"
+            verify(peer.identity, message["signature"], transcript(purpose, *offer_fields(message)))
+            return
         if "target" not in message:
             return super().validate_offer(peer, message)
         if not peer.direct_calls or set(message) != {
-            "type", "call", "identity", "ephemeral", "name", "signature", "target"
+            "type",
+            "call",
+            "identity",
+            "ephemeral",
+            "name",
+            "signature",
+            "target",
         }:
             raise ValueError("Invalid individual offer")
         decode(message["call"], 16)
@@ -43,8 +75,9 @@ class GroupLobby(Lobby):
         if message["target"] == peer.identity:
             raise ValueError("Cannot call yourself")
         self.check_sender(peer, message)
-        verify(peer.identity, message["signature"],
-               transcript("direct-offer", *offer_fields(message)))
+        verify(
+            peer.identity, message["signature"], transcript("direct-offer", *offer_fields(message))
+        )
 
     def presence_changed(self):
         # Coalesce synchronous membership changes and never stream presence to old clients.
@@ -64,7 +97,8 @@ class GroupLobby(Lobby):
             entries.append([peer.identity, peer.name, state])
         payload = json.dumps(entries, separators=(",", ":"))
         message = {
-            "type": "presence", "members": payload,
+            "type": "presence",
+            "members": payload,
             "truncated": "yes" if len(peers) > 32 else "no",
         }
         for peer, previous in list(self.presence_subscribers.items()):
@@ -76,12 +110,19 @@ class GroupLobby(Lobby):
 
     @staticmethod
     def parse(raw):
-        if not isinstance(raw, str) or len(raw.encode()) > 8192:
+        if not isinstance(raw, str) or len(raw.encode()) > SIGNAL_LIMIT:
             raise ValueError("Invalid group frame")
         value = json.loads(raw)
         if not isinstance(value, dict) or not all(isinstance(v, str) for v in value.values()):
             raise ValueError("Invalid group object")
+        if value.get("type") != "rtc-signal" and len(raw.encode()) > 8192:
+            raise ValueError("Invalid group frame")
         return value
+
+    def admit_control(self, peer, message):
+        # SDP has its own strict one-message-per-directed-pair/epoch budget.
+        if message.get("type") != "rtc-signal":
+            super().admit_control(peer, message)
 
     def close_offer(self, call, reason="closed"):
         for key in [key for key in self.request_timers if key[0] == call]:
@@ -91,6 +132,8 @@ class GroupLobby(Lobby):
             if peer:
                 peer.joined = None
         self.revisions.pop(call, None)
+        self.epochs.pop(call, None)
+        self.rtc_signals.pop(call, None)
         self.paused.discard(call)
         super().close_offer(call, reason)
         self.presence_changed()
@@ -126,6 +169,21 @@ class GroupLobby(Lobby):
 
     def dispatch(self, peer, message):
         kind = message.get("type")
+        if kind == "rtc-enable" and set(message) == {"type"}:
+            if not self.turn:
+                raise ValueError("WebRTC unavailable")
+            if not peer.webrtc:
+                peer.webrtc = True
+                peer.emit(
+                    {"type": "rtc-config", "servers": json.dumps(self.turn.servers(peer.identity))}
+                )
+                for offer in self.offers.values():
+                    if offer.message.get("media") == "webrtc" and self.visible_offer(offer, peer):
+                        peer.emit(offer.message)
+            return
+        if kind == "rtc-signal":
+            self.rtc_signal(peer, message)
+            return
         if kind == "direct-enable" and set(message) == {"type"}:
             if not peer.direct_calls:
                 peer.direct_calls = True
@@ -135,8 +193,12 @@ class GroupLobby(Lobby):
             return
         if kind == "request":
             offer = self.offers.get(message.get("call"))
-            if offer and offer.message.get("target") and (
-                not peer.direct_calls or peer.identity != offer.message["target"]
+            if offer and offer.message.get("media") == "webrtc" and not peer.webrtc:
+                raise ValueError("WebRTC capability required")
+            if (
+                offer
+                and offer.message.get("target")
+                and (not peer.direct_calls or peer.identity != offer.message["target"])
             ):
                 raise ValueError("Not the selected recipient")
         if kind == "direct-decline" and set(message) == {"type", "call"}:
@@ -156,10 +218,19 @@ class GroupLobby(Lobby):
             peer.emit({"type": "push-capabilities", "enabled": "yes" if self.push else "no"})
             return
         if kind == "push-register":
-            if set(message) != {"type", "token", "environment", "scope"} or not self.push:
+            keys = {"type", "token", "environment", "scope"}
+            if "media" in message:
+                keys.add("media")
+                if message["media"] != "webrtc" or not peer.webrtc:
+                    raise ValueError("Invalid push media capability")
+            if set(message) != keys or not self.push:
                 raise ValueError("Push registration unavailable")
             self.push.devices.register(
-                peer.identity, message["token"], message["environment"], message["scope"]
+                peer.identity,
+                message["token"],
+                message["environment"],
+                message["scope"],
+                webrtc=message.get("media") == "webrtc",
             )
             peer.emit({"type": "push-registered"})
             return
@@ -282,6 +353,8 @@ class GroupLobby(Lobby):
             member.emit(message)
         self.members[call] = members
         self.revisions[call] = revision
+        self.epochs[call] = message["epoch"]
+        self.rtc_signals[call] = set()
         self.paused.discard(call)
         if revision == 1:
             offer.expiry.cancel()
@@ -289,11 +362,62 @@ class GroupLobby(Lobby):
                 self.session_lifetime, self.close_offer, call, "expired"
             )
 
+    def rtc_signal(self, peer, message):
+        if set(message) != {
+            "type",
+            "call",
+            "revision",
+            "epoch",
+            "identity",
+            "to",
+            "kind",
+            "sdp",
+            "signature",
+        }:
+            raise ValueError("Invalid WebRTC signaling")
+        call = message["call"]
+        offer = self.offers.get(call)
+        if (
+            not peer.webrtc
+            or not offer
+            or offer.message.get("media") != "webrtc"
+            or peer.joined != call
+            or peer.identity not in self.members[call]
+            or message["identity"] != peer.identity
+        ):
+            raise ValueError("Not admitted to WebRTC call")
+        revision = int(message["revision"])
+        if revision < self.revisions[call] or call in self.paused:
+            super().admit_control(peer, message)
+            return
+        target = message["to"]
+        if (
+            message["revision"] != str(self.revisions[call])
+            or message["epoch"] != self.epochs.get(call)
+            or target == peer.identity
+            or target not in self.members[call]
+            or message["kind"] != ("offer" if peer.identity < target else "answer")
+        ):
+            raise ValueError("Invalid WebRTC pair or epoch")
+        pair = (peer.identity, target)
+        if pair in self.rtc_signals[call]:
+            raise ValueError("Duplicate WebRTC description")
+        validate_sdp(message["sdp"])
+        verify(
+            peer.identity, message["signature"], transcript("rtc-signal", *signal_fields(message))
+        )
+        self.rtc_signals[call].add(pair)
+        other = self.peers.get(target)
+        if other:
+            other.emit(message)
+
     def media(self, peer, raw):
         # destination key || epoch revision || counter/ciphertext/tag.
         if len(raw) != 705 or not peer.joined:
             raise ValueError("Invalid media")
         call = peer.joined
+        if self.offers[call].message.get("media") == "webrtc":
+            raise ValueError("PCM is not permitted in WebRTC calls")
         now = time.monotonic()
         peer.media_allowance = min(600, peer.media_allowance + (now - peer.media_last) * 300)
         peer.media_last = now

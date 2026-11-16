@@ -29,6 +29,7 @@ class Device:
     environment: str
     scope: str
     updated: float
+    webrtc: bool = False
 
 
 class PushDevices:
@@ -46,12 +47,14 @@ class PushDevices:
             "(identity TEXT PRIMARY KEY, token TEXT UNIQUE, environment TEXT, scope TEXT, "
             "updated REAL, namespace TEXT)"
         )
+        if "webrtc" not in {row[1] for row in self.db.execute("PRAGMA table_info(devices)")}:
+            self.db.execute("ALTER TABLE devices ADD COLUMN webrtc INTEGER NOT NULL DEFAULT 0")
         self.namespace = hashlib.sha256(access_token.encode()).hexdigest()
         # Rotating the relay credential also revokes registrations from the old group.
         self.db.execute("DELETE FROM devices WHERE namespace != ?", (self.namespace,))
         self.db.commit()
 
-    def register(self, identity, token, environment, scope):
+    def register(self, identity, token, environment, scope, webrtc=False):
         parts = urlsplit(scope)
         if (
             not TOKEN.fullmatch(token)
@@ -78,11 +81,11 @@ class PushDevices:
         try:
             with self.db:
                 self.db.execute(
-                    "INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(identity) DO UPDATE SET token=excluded.token, "
                     "environment=excluded.environment, scope=excluded.scope, "
-                    "updated=excluded.updated",
-                    (identity, token, environment, scope, now, self.namespace),
+                    "updated=excluded.updated, webrtc=excluded.webrtc",
+                    (identity, token, environment, scope, now, self.namespace, int(webrtc)),
                 )
         except sqlite3.IntegrityError as error:
             raise ValueError("Push token already registered") from error
@@ -98,7 +101,7 @@ class PushDevices:
 
     def recipients(self, caller):
         rows = self.db.execute(
-            "SELECT identity, token, environment, scope, updated FROM devices "
+            "SELECT identity, token, environment, scope, updated, webrtc FROM devices "
             "WHERE identity != ? AND updated >= ?",
             (caller, time.time() - RETENTION),
         )
@@ -107,8 +110,8 @@ class PushDevices:
     def current(self, device):
         return (
             self.db.execute(
-                "SELECT 1 FROM devices WHERE identity=? AND token=? AND updated=?",
-                (device.identity, device.token, device.updated),
+                "SELECT 1 FROM devices WHERE identity=? AND token=? AND updated=? AND webrtc=?",
+                (device.identity, device.token, device.updated, int(device.webrtc)),
             ).fetchone()
             is not None
         )
@@ -214,6 +217,8 @@ class PushService:
             return
         self.last_call[caller] = now
         for device in self.devices.recipients(caller):
+            if offer.get("media") == "webrtc" and not device.webrtc:
+                continue
             if offer.get("target") is not None and device.identity != offer["target"]:
                 continue
             try:

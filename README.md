@@ -160,7 +160,11 @@ unauthorized access, room isolation/capacity, malformed input, cleanup,
 timeouts, and two real client transports exchanging synthetic audio through a
 real local WebSocket relay. Synthetic tests do not record or play real sound.
 
-## Stage-One Tradeoffs
+## Legacy Audio Tradeoffs
+
+These limits describe desktop/manual calls and iPhone calls with WebRTC turned
+off. New iPhone group/individual calls can use [WebRTC audio](iphone/WEBRTC.md)
+with Opus and authenticated DTLS-SRTP after configuring TURN.
 
 - Audio is raw PCM16 little-endian, mono, 16 kHz, 20 ms per frame.
 - Payload bandwidth is 256 kbit/s per direction. Encrypted application frames
@@ -206,9 +210,10 @@ either party leaving ends the call. Verified recipients need only Answer;
 first-time device verification is still required. Upgrade both apps and the relay.
 
 One relay/token defines the group. Group announcements are visible to every connected
-group client, but audio is encrypted separately for each admitted pair. Members
+compatible group client, but audio is encrypted separately for each admitted pair. Members
 can leave without ending the call; caller departure ends it for everyone. There
-is no extra public port. Optional APNs delivery uses a private device-registration
+is no extra public port for legacy audio; WebRTC adds TURN media ports.
+Optional APNs delivery uses a private device-registration
 database and enables locked/backgrounded iPhone ringing through PushKit and CallKit.
 Desktop clients and old iPhone clients retain manual two-person calling.
 Group raw-PCM bandwidth grows quadratically: about 3.81 GB/hour relay egress at
@@ -220,9 +225,15 @@ caller-approved admission; manual calls require peer key confirmation.
 Accepted CallKit calls continue in the background; audio interruption ends the call.
 
 Before wider deployment: independent review of the audio and device-identity
-protocols, Opus compression, desktop echo cancellation, device lifecycle and
+protocols and WebRTC integration, desktop echo cancellation, device lifecycle and
 network-change handling, stronger abuse controls, signed client releases,
-and a real-time media transport evaluation.
+and real-device audio-quality evaluation.
+
+For WebRTC, upgrade the relay and participating iPhones, configure
+`VPCOMM_TURN_URLS`/`VPCOMM_TURN_SECRET`, and use **Settings > Use WebRTC audio**.
+See [WebRTC setup and rollout](iphone/WEBRTC.md), including the optional
+`deploy/compose.webrtc.yaml` override. The legacy option remains for older apps;
+WebRTC does not replace APNs background ringing.
 
 See [Background Calls](iphone/BACKGROUND_CALLS.md) to configure Apple provisioning,
 APNs credentials, and the optional deployment override. Real delivery requires

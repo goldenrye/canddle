@@ -1,0 +1,31 @@
+# Linux host networking preserves TURN's advertised UDP ports. See iphone/WEBRTC.md.
+services:
+  relay:
+    environment:
+      VPCOMM_TURN_URLS: ${VPCOMM_TURN_URLS:?Set TURN URLs}
+      VPCOMM_TURN_SECRET: ${VPCOMM_TURN_SECRET:?Set a random TURN shared secret}
+
+  turn:
+    image: coturn/coturn:4.7.0
+    restart: unless-stopped
+    network_mode: host
+    entrypoint: ["/bin/sh", "/opt/canddle/start-turn.sh"]
+    environment:
+      VPCOMM_TURN_SECRET: ${VPCOMM_TURN_SECRET:?Set a random TURN shared secret}
+      VPCOMM_TURN_REALM: ${VPCOMM_TURN_REALM:?Set the TURN DNS hostname}
+      VPCOMM_TURN_PUBLIC_IP: ${VPCOMM_TURN_PUBLIC_IP:?Set the public IPv4 address}
+      VPCOMM_TURN_PRIVATE_IP: ${VPCOMM_TURN_PRIVATE_IP:?Set the host interface IPv4 address}
+    volumes:
+      - ./deploy/start-turn.sh:/opt/canddle/start-turn.sh:ro
+    tmpfs:
+      - /tmp:mode=1777,size=4m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "2"

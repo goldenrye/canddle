@@ -27,7 +27,11 @@ def transcript(purpose, *fields):
 
 def offer_fields(offer):
     fields = [offer[k] for k in ("call", "identity", "ephemeral", "name")]
-    return fields + [offer["target"]] if "target" in offer else fields
+    if "target" in offer:
+        fields.append(offer["target"])
+    if "media" in offer:
+        fields.append(offer["media"])
+    return fields
 
 
 def request_fields(offer, request):
@@ -61,6 +65,7 @@ class Peer:
     media_allowance: float = 600
     media_last: float = field(default_factory=time.monotonic)
     direct_calls: bool = False
+    webrtc: bool = False
 
     def emit(self, message):
         try:
@@ -105,6 +110,14 @@ class Lobby:
 
     def presence_changed(self):
         pass
+
+    def admit_control(self, peer, message):
+        now = time.monotonic()
+        peer.allowance = min(12, peer.allowance + (now - peer.last) * 2)
+        peer.last = now
+        if peer.allowance < 1:
+            raise ValueError("Rate exceeded")
+        peer.allowance -= 1
 
     def visible_offer(self, offer, peer):
         return True
@@ -182,12 +195,7 @@ class Lobby:
                         self.media(peer, raw)
                         continue
                     message = self.parse(raw)
-                    now = time.monotonic()
-                    peer.allowance = min(12, peer.allowance + (now - peer.last) * 2)
-                    peer.last = now
-                    if peer.allowance < 1:
-                        raise ValueError("Rate exceeded")
-                    peer.allowance -= 1
+                    self.admit_control(peer, message)
                     self.dispatch(peer, message)
                     self.presence_changed()
         except (ValueError, TypeError, KeyError, TimeoutError):

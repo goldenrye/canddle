@@ -277,7 +277,16 @@ No relay address, access token, invitation, or CA private key is bundled.
 
 ## Audio
 
-The client converts device audio to mono 16 kHz PCM16 little-endian, 320 samples
+New outgoing calls default to **WebRTC audio**, requiring an upgraded relay with
+TURN configured and updated peers. It uses native Opus, adaptive jitter buffering,
+loss concealment and DTLS-SRTP. Signaling, device verification, admission and
+CallKit remain in place. Turn off **Settings > Use WebRTC audio** to start
+legacy-compatible calls; incoming calls keep their signed media mode.
+See [WebRTC setup, security and tests](WEBRTC.md) before deployment.
+
+### Legacy PCM Audio
+
+With WebRTC off, the client converts device audio to mono 16 kHz PCM16 little-endian, 320 samples
 per 20 ms frame. It uses AVAudioEngine voice processing on supported hardware
 for echo cancellation. Headphones are still recommended.
 
@@ -334,7 +343,9 @@ Group signaling has a 45-second receive timeout, kept alive by 15-second heartbe
 Group media uses 705-byte frames for each directed pair, about 127 MB/hour of
 relay egress per directed link before transport overhead: approximately 3.81 GB/hour
 for six participants (30 directed links), and about 1.41 Mbit/s upload per phone.
-Opus compression and a reviewed real-time media transport remain future work.
+WebRTC calls bypass this PCM transport, mixer and audio engine entirely. They
+remain dependent on a live signaling connection and CallKit activation, and do
+not yet automatically restart ICE after a network change.
 
 ## Tests
 

@@ -66,6 +66,12 @@ final class CallStore: ObservableObject {
     @Published private(set) var settingsError: String?
     @Published private(set) var nameError: String?
     @Published var deviceNameDraft = ""
+    @Published var useWebRTCAudio = true {
+        didSet {
+            lobby.preferWebRTC = useWebRTCAudio
+            UserDefaults.standard.set(useWebRTCAudio, forKey: "useWebRTCAudio")
+        }
+    }
     @Published var autoAcceptVerifiedDevices = false {
         didSet {
             lobby.autoAcceptVerifiedDevices = autoAcceptVerifiedDevices
@@ -90,6 +96,7 @@ final class CallStore: ObservableObject {
     private var root: Data?
     private var relay: Relay?
     private var audio: AudioIO?
+    private var rtcAudio: WebRTCAudio?
     private var task: Task<Void, Never>?
     private var generation = UUID()
     private var observers: [NSObjectProtocol] = []
@@ -100,12 +107,23 @@ final class CallStore: ObservableObject {
     var settingsVisible = false
 
     init() {
+        WebRTCAudio.prepare()
+        useWebRTCAudio = UserDefaults.standard.object(forKey: "useWebRTCAudio") as? Bool ?? true
+        lobby.webRTCAvailable = true
+        lobby.preferWebRTC = useWebRTCAudio
         autoAcceptVerifiedDevices = UserDefaults.standard.bool(forKey: "autoAcceptVerifiedDevices")
         lobby.autoAcceptVerifiedDevices = autoAcceptVerifiedDevices
         if let name = UserDefaults.standard.string(forKey: "deviceName") {
             lobby.rename(name)
         }
         lobby.onAudioReady = { [weak self] in self?.systemCalls.mediaReady() }
+        lobby.onWebRTCSessionChanged = { [weak self] session in
+            guard let self, let audio = self.rtcAudio else { return }
+            guard let session else { audio.stop(); self.rtcAudio = nil; return }
+            do { try audio.update(session) }
+            catch { self.failWebRTC("Could not update WebRTC membership securely.") }
+        }
+        lobby.onWebRTCSignal = { [weak self] signal in self?.rtcAudio?.receive(signal) }
         lobby.onCallClosed = { [weak self] call in self?.systemCalls.closed(call) }
         lobby.onDisconnected = { [weak self] in self?.systemCalls.disconnected() }
         lobby.onAudioEnded = { [weak self] message in
@@ -349,6 +367,10 @@ final class CallStore: ObservableObject {
                 guard await AudioIO.permission() else { throw VoiceError.microphone }
                 try Task.checkCancellation()
                 guard generation == id, lobby.inCall else { return }
+                if let session = lobby.webRTCSession {
+                    try startWebRTC(session, id: id)
+                    return
+                }
                 let audio = AudioIO()
                 self.audio = audio
                 status = "Starting group microphone and speaker..."
@@ -393,6 +415,28 @@ final class CallStore: ObservableObject {
                 if generation == id { finish(id, message: message) }
             }
         }
+    }
+
+    private func startWebRTC(_ session: WebRTCSession, id: UUID) throws {
+        let rtc = WebRTCAudio()
+        rtcAudio = rtc
+        rtc.send = { [weak self] sdp, kind, target, epoch in
+            guard let self else { throw VoiceError.ended }
+            try await self.lobby.sendWebRTC(sdp: sdp, kind: kind, to: target, epoch: epoch)
+        }
+        rtc.onFailure = { [weak self] message in
+            guard self?.generation == id else { return }
+            self?.failWebRTC(message)
+        }
+        rtc.onConnected = { [weak self] connected in
+            guard let self, self.generation == id else { return }
+            self.connected = connected
+            self.status = connected ? "Encrypted WebRTC audio (Opus)." : "Connecting WebRTC audio..."
+        }
+        status = "Connecting WebRTC audio..."
+        try rtc.start(session)
+        for signal in lobby.webRTCSignals { rtc.receive(signal) }
+        observeAudio(id)
     }
 
     func start() {
@@ -487,6 +531,12 @@ final class CallStore: ObservableObject {
         guard connected else { return }
         muted.toggle()
         audio?.mute(muted)
+        rtcAudio?.mute(muted)
+    }
+
+    private func failWebRTC(_ message: String) {
+        callFailure = message
+        lobby.disconnect(message)
     }
 
     func hangUp(_ message: String = "Call ended. Use a new invitation.") {
@@ -526,6 +576,8 @@ final class CallStore: ObservableObject {
         relay = nil
         audio?.stop()
         audio = nil
+        rtcAudio?.stop()
+        rtcAudio = nil
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         UIApplication.shared.isIdleTimerDisabled = false

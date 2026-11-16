@@ -210,6 +210,10 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     }
 
     private func configureAudio() throws {
+        if owner?.lobby.usesWebRTC == true {
+            try WebRTCAudio.configureAudio()
+            return
+        }
         try AVAudioSession.sharedInstance().setCategory(
             .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth]
         )
@@ -217,6 +221,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
 
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         audioActive = true
+        WebRTCAudio.activate(audioSession)
         if owner?.lobby.inCall == true {
             deadline?.cancel()
             owner?.startGroupAudio()
@@ -229,6 +234,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         audioActive = false
+        WebRTCAudio.deactivate(audioSession)
         if hasCall { end(reason: .failed) }
     }
 

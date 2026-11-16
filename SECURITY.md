@@ -111,9 +111,11 @@ Global pairing rate limiting is not DDoS protection.
   `127.0.0.1`, and `::1`, for development. Remote plaintext URLs are rejected.
 - Server TLS certificates are validated with hostname verification. `--ca`
   chooses a private trust root; there is no insecure/skip-validation option.
-- Client proxy auto-discovery is disabled. No external media service is called.
-- WebSocket compression is disabled. The transport receive ceiling is 8192 bytes
-  for group rosters; manual room frames and legacy lobby frames remain limited
+- Client proxy auto-discovery is disabled. WebRTC uses only the operator-configured
+  TURN service and peer ICE addresses, not hardcoded public STUN/TURN services.
+- WebSocket compression is disabled. The transport receive ceiling is 32768 bytes
+  for WebRTC SDP messages; other group frames remain limited to 8192 bytes.
+  Manual room frames and legacy lobby frames remain limited
   to 1024 bytes by their handlers. Manual room payloads must be binary after join.
 - Initial join: `{"v":1,"room":"<room identifier>"}` as a text frame.
 - Relay responses are `{"type":"waiting"}` followed by `{"type":"ready"}`, or
@@ -124,6 +126,57 @@ Global pairing rate limiting is not DDoS protection.
 - `/healthz` is intentionally unauthenticated and returns only `ok`.
 - Browser-originated WebSocket requests are rejected. The protocol is for a
   locally installed native client, not a web page.
+
+### WebRTC Media
+
+WebRTC is an optional, capability-negotiated group/individual media mode.
+The signed call offer adds `media=webrtc`, appended after any target in its
+length-prefixed fields, under `webrtc-offer` or `webrtc-direct-offer`. Requests,
+confirmation codes and signed rosters therefore bind the media choice too.
+Legacy offers/signatures are unchanged. Old clients never receive WebRTC offers
+or pushes; push capability is persisted separately from the token. No silent
+media downgrade is performed. Unsupported clients can still use explicit legacy
+calls; manual rooms remain PCM-over-WebSocket.
+
+Only authenticated clients receive temporary coturn REST credentials, valid for
+two hours (longer than the one-hour signaling/call limit). The shared secret is
+not sent to clients. The relay bearer token alone authorizes credential issuance:
+this is not a separately approved TURN-user list. Leaked temporary credentials
+can consume TURN service until expiry; configure allocation/bandwidth limits,
+private-address deny rules, firewalls and monitoring. Rotate both TURN secret
+and relay token when appropriate. There is no individual TURN revocation.
+
+Each `rtc-signal` contains string fields `call`, `revision`, `epoch`, `identity`,
+`to`, `kind`, `sdp`, plus `type` and Ed25519 `signature`. Its transcript purpose
+is `rtc-signal` with those seven fields in that order. Both relay and clients
+verify admitted membership, recipient, epoch, role and signature. The lower
+sorted public identity sends the offer. The full SDP (including DTLS fingerprint,
+ICE credentials and candidates) is signed before use by WebRTC. This binds
+DTLS-SRTP endpoints to the existing verified identity/admission chain.
+
+SDP is audio-only, uses DTLS/SRTP with a SHA-256 fingerprint and Opus, and is
+limited to 24000 UTF-8 bytes within a 32768-byte JSON frame. Non-trickle ICE
+allows one description per directed pair per epoch (at most five per client).
+This separate budget avoids relaxing the ordinary control-frame token bucket;
+stale descriptions are dropped under the ordinary rate budget. Replay,
+non-members and future/mismatched epochs are rejected. PCM frames are forbidden
+in WebRTC calls. There is no video, data channel, recording or SDP event logging.
+
+On each authenticated roster change, every old peer connection is closed and
+new ICE credentials/certificates are created, including between remaining
+participants. Removed peers lose their links once honest peers apply that roster.
+As with the existing protocol, a malicious relay can delay/drop control messages;
+signatures do not provide availability or instantaneous global revocation.
+Clients close media on signaling loss, cancellation, removal or audio shutdown.
+Microphone startup also requires iOS permission and CallKit activation.
+
+The relay sees SDP/candidates; direct peers learn each other's network addresses.
+TURN sees addressing/timing/volume but cannot decrypt DTLS-SRTP audio. TURN/TCP
+may be selected if UDP is blocked. Group media remains a bounded six-device mesh,
+not an SFU or server-mixed call. Network handoff/ICE restart and real-device audio
+quality still require further validation. Native WebRTC M157 is a pinned
+community binary; neither its integration nor the custom identity protocol has
+received an independent audit. See [WebRTC deployment](iphone/WEBRTC.md).
 
 ### Legacy Two-Person Lobby
 

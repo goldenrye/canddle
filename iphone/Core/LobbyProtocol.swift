@@ -47,11 +47,20 @@ struct LobbyOffer: Identifiable {
     var ephemeral: String { message["ephemeral"]! }
     var name: String { message["name"]! }
     var target: String? { message["target"] }
-    var fields: [String] { [id, identity, ephemeral, name] + (target.map { [$0] } ?? []) }
+    var usesWebRTC: Bool { message["media"] == "webrtc" }
+    var fields: [String] {
+        [id, identity, ephemeral, name] + (target.map { [$0] } ?? [])
+            + (message["media"].map { [$0] } ?? [])
+    }
+    private var purpose: String {
+        (usesWebRTC ? "webrtc-" : "") + (target == nil ? "offer" : "direct-offer")
+    }
 
     init(_ message: [String: String]) throws {
         let keys: Set<String> = ["type", "call", "identity", "ephemeral", "name", "signature"]
-        guard Set(message.keys) == keys.union(message["target"] == nil ? [] : ["target"]),
+        guard Set(message.keys) == keys.union(message["target"] == nil ? [] : ["target"])
+                .union(message["media"] == nil ? [] : ["media"]),
+              message["media"] == nil || message["media"] == "webrtc",
               message["type"] == "offer", LobbyProtocol.nameValid(message["name"]!) else {
             throw VoiceError.packet
         }
@@ -63,21 +72,24 @@ struct LobbyOffer: Identifiable {
             guard target != identity else { throw VoiceError.peer }
         }
         try LobbyProtocol.verify(identity, message["signature"]!,
-                                 LobbyProtocol.transcript(target == nil ? "offer" : "direct-offer", fields))
+                                 LobbyProtocol.transcript(purpose, fields))
     }
 
     static func create(identity: Curve25519.Signing.PrivateKey, name: String,
                        ephemeral: Curve25519.KeyAgreement.PrivateKey,
-                       target: String? = nil) throws -> LobbyOffer {
+                       target: String? = nil, webRTC: Bool = false) throws -> LobbyOffer {
         var message = [
             "type": "offer", "call": LobbyProtocol.randomID(), "name": name,
             "identity": VoiceProtocol.base64(identity.publicKey.rawRepresentation),
             "ephemeral": VoiceProtocol.base64(ephemeral.publicKey.rawRepresentation)
         ]
         if let target { message["target"] = target }
-        let fields = ["call", "identity", "ephemeral", "name"].map { message[$0]! } + (target.map { [$0] } ?? [])
+        if webRTC { message["media"] = "webrtc" }
+        let fields = ["call", "identity", "ephemeral", "name"].map { message[$0]! }
+            + (target.map { [$0] } ?? []) + (webRTC ? ["webrtc"] : [])
+        let purpose = (webRTC ? "webrtc-" : "") + (target == nil ? "offer" : "direct-offer")
         message["signature"] = VoiceProtocol.base64(
-            try identity.signature(for: LobbyProtocol.transcript(target == nil ? "offer" : "direct-offer", fields))
+            try identity.signature(for: LobbyProtocol.transcript(purpose, fields))
         )
         return try Self(message)
     }
@@ -130,7 +142,7 @@ struct IncomingCallPush {
               let expires = payload["expires"] as? Double,
               expires.isFinite, expires >= now, expires <= now + 60,
               let message = payload["offer"] as? [String: String],
-              (6...7).contains(message.count), message.values.allSatisfy({ $0.utf8.count <= 256 }) else {
+              (6...8).contains(message.count), message.values.allSatisfy({ $0.utf8.count <= 256 }) else {
             throw VoiceError.packet
         }
         offer = try LobbyOffer(message)
