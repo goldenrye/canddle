@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import WebRTC
 
@@ -22,6 +23,35 @@ struct WebRTCChecks {
         config.rtcpMuxPolicy = .require
         config.continualGatheringPolicy = .gatherOnce
         config.iceServers = []
+        let stalledTURN = CommandLine.arguments.contains("--stalled-turn")
+        var blackhole: Int32 = -1
+        defer { if blackhole >= 0 { Darwin.close(blackhole) } }
+        if stalledTURN {
+            // A loopback UDP socket that deliberately never answers TURN requests.
+            // No external server or microphone is accessed by this probe.
+            blackhole = socket(AF_INET, SOCK_DGRAM, 0)
+            guard blackhole >= 0 else { throw VoiceError.packet }
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let bound = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.bind(blackhole, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard bound == 0 else { throw VoiceError.packet }
+            var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let named = withUnsafeMutablePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    getsockname(blackhole, $0, &size)
+                }
+            }
+            guard named == 0 else { throw VoiceError.packet }
+            config.iceServers = [RTCIceServer(
+                urlStrings: ["turn:127.0.0.1:\(UInt16(bigEndian: address.sin_port))?transport=udp"],
+                username: "test", credential: "test")]
+        }
         let a = factory.peerConnection(with: config, constraints: constraints, delegate: nil)!
         let b = factory.peerConnection(with: config, constraints: constraints, delegate: nil)!
         defer { a.close(); b.close() }
@@ -49,6 +79,23 @@ struct WebRTCChecks {
         }
         let offer = try await a.offer(for: constraints)
         try await a.setLocalDescription(offer)
+        if stalledTURN {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(26))
+            while a.iceGatheringState != .complete && ContinuousClock.now < deadline {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let candidates = a.localDescription!.sdp.components(separatedBy: .newlines)
+                .filter { $0.hasPrefix("a=candidate:") }
+            let progress = WebRTCSetupProgress(
+                isOfferer: true, localReady: true, localDelivered: false,
+                remoteReceived: false, remoteApplied: false,
+                gatheringComplete: a.iceGatheringState == .complete)
+            precondition(progress.stage == .gathering)
+            precondition(!candidates.isEmpty && !candidates.contains { $0.contains(" typ relay") })
+            print("STALLED TURN: complete=\(a.iceGatheringState == .complete), "
+                  + "candidates=\(candidates.count), relay=\(candidates.filter { $0.contains(" typ relay") }.count)")
+            return
+        }
         try await wait { a.iceGatheringState == .complete }
         let signedOffer = try WebRTCSignal.create(sdp: a.localDescription!.sdp, kind: "offer",
             to: sessions[1].identity, session: sessions[0], signing: keys[0])

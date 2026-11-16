@@ -137,6 +137,10 @@ Legacy offers/signatures are unchanged. Old clients never receive WebRTC offers
 or pushes; push capability is persisted separately from the token. No silent
 media downgrade is performed. Unsupported clients can still use explicit legacy
 calls; manual rooms remain PCM-over-WebSocket.
+If the relay does not advertise WebRTC, the start action offers a one-call
+legacy confirmation before creating any signed offer. Confirmation is bound to
+the current relay connection and selected recipient; it does not change the
+saved WebRTC preference or switch an already-announced WebRTC call to PCM.
 
 Only authenticated clients receive temporary coturn REST credentials, valid for
 two hours (longer than the one-hour signaling/call limit). The shared secret is

@@ -433,6 +433,10 @@ final class CallStore: ObservableObject {
             self.connected = connected
             self.status = connected ? "Encrypted WebRTC audio (Opus)." : "Connecting WebRTC audio..."
         }
+        rtc.onProgress = { [weak self] message in
+            guard let self, self.generation == id, !self.connected else { return }
+            self.status = message
+        }
         status = "Connecting WebRTC audio..."
         try rtc.start(session)
         for signal in lobby.webRTCSignals { rtc.receive(signal) }

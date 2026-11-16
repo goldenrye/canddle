@@ -517,22 +517,50 @@ struct GroupChecks {
         host.preferWebRTC = true
         receiver.connect(settings)
         legacy.connect(settings)
-        host.connect(settings)
+        host.connect(settings, startCall: mode == "rtc-legacy-cold-start")
         try await wait { host.online && receiver.presenceReady && legacy.presenceReady }
-        if mode == "rtc-legacy-relay" {
-            host.announce()
+        if mode.hasPrefix("rtc-legacy-") {
+            let target = mode == "rtc-legacy-direct" ? receiver.ownIdentity : nil
+            if mode != "rtc-legacy-cold-start" { host.announce(target: target) }
             precondition(host.ownOffer == nil && !host.webRTCSupported)
-            host.preferWebRTC = false
-            host.announce()
-            try await wait { receiver.offers.count == 1 && legacy.offers.count == 1 }
+            precondition(host.pendingLegacyCall != nil && !host.waiting)
+            precondition(receiver.offers.isEmpty && legacy.offers.isEmpty)
+            host.dismissLegacyCallRequest()
+            precondition(host.pendingLegacyCall == nil && host.ownOffer == nil)
+            host.announce(target: target)
+            let stale = host.pendingLegacyCall!
+            host.disconnect()
+            precondition(host.pendingLegacyCall == nil)
+            host.connect(settings)
+            try await wait { host.online }
+            host.confirmLegacyCall(stale)
+            precondition(host.ownOffer == nil)
+            host.announce(target: target)
+            let request = host.pendingLegacyCall!
+            // SwiftUI can dismiss the presentation before running its button action.
+            host.dismissLegacyCallRequest()
+            host.confirmLegacyCall(request)
+            try await wait { receiver.offers.count == 1 && !host.sending }
+            precondition(host.pendingLegacyCall == nil && host.preferWebRTC)
             precondition(!receiver.offers[0].usesWebRTC)
+            precondition(receiver.offers[0].target == target)
+            if target == nil { try await wait { legacy.offers.count == 1 } }
+            else { precondition(legacy.offers.isEmpty) }
+            receiver.request(receiver.offers[0])
+            try await wait { host.candidates.count == 1 && !receiver.sending }
+            receiver.confirmCaller()
+            try await wait { host.candidates[0].confirmed && !host.sending }
+            host.approve(host.candidates[0])
+            try await wait { host.inCall && receiver.inCall && !host.sending }
+            try await audio([host, receiver])
+            precondition(!host.usesWebRTC && host.webRTCSession == nil)
             return
         }
         try await wait { host.webRTCSupported && receiver.webRTCSupported }
         host.announce(target: mode == "rtc-direct" ? receiver.ownIdentity : nil)
         try await wait { receiver.offers.count == 1 && !host.sending }
         let offer = receiver.offers[0]
-        precondition(offer.usesWebRTC && legacy.offers.isEmpty)
+        precondition(offer.usesWebRTC && legacy.offers.isEmpty && host.pendingLegacyCall == nil)
         let push = try IncomingCallPush([
             "v": 1, "scope": settings.url.absoluteString, "recipient": receiver.ownIdentity,
             "expires": Date().timeIntervalSince1970 + 30, "offer": offer.message

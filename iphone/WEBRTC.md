@@ -14,7 +14,10 @@ will never be used.
    capability-aware push registration.
 3. **Settings > Use WebRTC audio** is on by default for new outgoing calls.
    Offers show **WebRTC / Opus** or **Legacy / TCP**. An older/unconfigured relay
-   produces a setup message instead of silently changing the audio mode.
+   offers an explicit **Start legacy group call** (or individual call) choice
+   instead of blocking startup. Cancel sends no invitation; confirming uses
+   encrypted TCP audio for this call without changing the WebRTC preference.
+   A call already announced as WebRTC never silently changes its audio mode.
 4. To call older apps, turn that setting off before starting the call.
    Incoming calls retain their signed media mode regardless of this preference.
 
@@ -119,6 +122,37 @@ metadata but cannot decrypt audio. Direct peers learn network addresses.
 No public third-party STUN/TURN server is hardcoded. The device identity and
 signaling protocol remain experimental and have not been independently audited.
 
+## Connection Timeouts
+
+Admission and an advertised WebRTC capability do not prove TURN reachability:
+the relay checks TURN configuration syntax, not the running service or firewall.
+The call screen now reports its current media-setup stage. Timeout alerts include
+a stage code and redacted local/remote SDP candidate counts, not SDP, IPs or secrets:
+
+- `RTC_GATHERING`: gathering did not finish. This non-trickle implementation waits
+  for all candidate gathering before sending SDP. A silent TURN endpoint can block
+  that even when host candidates already exist. Check listener access, DNS and
+  TURN responses; a zero relay count does not by itself prove bad credentials.
+- `RTC_WAIT_OFFER` / `RTC_WAIT_ANSWER`: the other device has not supplied its
+  description. Check its error too; it may be stalled in gathering or audio setup.
+- `RTC_CONNECTIVITY`: descriptions were exchanged but the media route/DTLS has
+  not connected (or was lost). Check public/private IP mapping, TURN allocation
+  and permission errors, and UDP relay ports 49160-49259 as well as listener 3478.
+- `RTC_LOCAL_SDP`, `RTC_REMOTE_SDP`, `RTC_SIGNAL_SEND`: description generation,
+  application, or delivery is incomplete, respectively.
+
+Collect TURN logs immediately after one attempt, on the deployment host:
+
+```sh
+docker compose -f compose.yaml -f deploy/compose.webrtc.yaml logs --since=5m turn
+```
+
+Retain any additional deployment-specific overrides if needed. Do not share
+`.env`, TURN credentials or unredacted SDP. Logs may contain endpoint addresses
+and usernames; redact those before sharing. Compare the complete alert messages
+on both phones and record whether they use the same Wi-Fi or different networks.
+These diagnostics do not change timeouts or silently fall back to legacy audio.
+
 ## Dependency and Validation
 
 The Xcode target pins the community-distributed `stasel/WebRTC` package to
@@ -152,6 +186,11 @@ xcrun swiftc -parse-as-library \
 
 This probe uses receive-only transceivers: it does not record or play sound.
 Successful negotiation does not establish physical audio quality.
+Run `/tmp/canddle-webrtc-checks --stalled-turn` to reproduce incomplete gathering
+against a silent loopback TURN endpoint. With the pinned SDK, gathering remains
+incomplete after 26 seconds despite available host candidates, outlasting the
+app's 25-second setup deadline. This is a local failure-path test, not evidence
+about any particular deployed TURN server.
 
 Before rollout, test on two signed iPhones:
 

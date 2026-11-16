@@ -13,7 +13,9 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         var publishing: Task<Void, Never>?
         var deadline: Task<Void, Never>?
         var localSent = false
+        var localDelivered = false
         var remoteSet = false
+        var remoteApplied = false
         init(peer: String, connection: RTCPeerConnection) {
             self.peer = peer
             self.connection = connection
@@ -33,6 +35,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     var send: ((String, String, String, String) async throws -> Void)?
     var onFailure: ((String) -> Void)?
     var onConnected: ((Bool) -> Void)?
+    var onProgress: ((String) -> Void)?
 
     static func prepare() {
         let audio = RTCAudioSession.sharedInstance()
@@ -118,18 +121,22 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             }
         }
         if links.isEmpty { onConnected?(true) }
+        reportProgress()
     }
 
     func receive(_ signal: WebRTCSignal) {
         guard let session, signal.message["epoch"] == session.roster.message["epoch"],
               let link = links[signal.identity], !link.remoteSet, current(link) else { return }
         link.remoteSet = true
+        reportProgress()
         link.negotiation = Task {
             do {
                 let description = RTCSessionDescription(type: signal.kind == "offer" ? .offer : .answer,
                                                         sdp: signal.sdp)
                 try await link.connection.setRemoteDescription(description)
                 guard current(link) else { return }
+                link.remoteApplied = true
+                reportProgress()
                 if signal.kind == "offer" {
                     let answer = try await link.connection.answer(for: constraints)
                     guard current(link) else { return }
@@ -141,6 +148,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     }
 
     private func publish(_ link: Link) {
+        reportProgress()
         guard current(link), !link.localSent, let session,
               link.connection.iceGatheringState == .complete,
               let description = link.connection.localDescription else { return }
@@ -152,11 +160,36 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             do {
                 guard let send else { throw VoiceError.ended }
                 try await send(description.sdp, description.type == .offer ? "offer" : "answer", link.peer, epoch)
+                guard current(link) else { return }
+                link.localDelivered = true
+                reportProgress()
             } catch { if current(link) { fail("WebRTC signaling could not be sent.") } }
         }
     }
 
     private func current(_ link: Link) -> Bool { !stopped && links[link.peer] === link }
+
+    private func progress(_ link: Link) -> WebRTCSetupProgress {
+        WebRTCSetupProgress(
+            isOfferer: (session?.identity ?? "") < link.peer,
+            localReady: link.connection.localDescription != nil,
+            localDelivered: link.localDelivered,
+            remoteReceived: link.remoteSet,
+            remoteApplied: link.remoteApplied,
+            gatheringComplete: link.connection.iceGatheringState == .complete)
+    }
+
+    private func reportProgress() {
+        guard !stopped, let link = links.values.sorted(by: { $0.peer < $1.peer }).first(where: {
+            $0.connection.connectionState != .connected
+        }) else { return }
+        onProgress?("Connecting WebRTC audio: \(progress(link).stage.status)")
+    }
+
+    private func failConnection(_ link: Link) {
+        fail(progress(link).failure(localSDP: link.connection.localDescription?.sdp,
+                                    remoteSDP: link.connection.remoteDescription?.sdp))
+    }
 
     private func setDeadline(_ link: Link, seconds: UInt64) {
         link.deadline?.cancel()
@@ -164,7 +197,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             do {
                 try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
                 if current(link) {
-                    fail("WebRTC could not connect. Check the TURN configuration and network, then call again.")
+                    failConnection(link)
                 }
             } catch {}
         }
@@ -178,10 +211,11 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         case .disconnected:
             if link.deadline == nil { setDeadline(link, seconds: 10) }
         case .failed:
-            fail("WebRTC audio connection failed. Check TURN/network access and call again.")
+            failConnection(link)
         default: break
         }
         onConnected?(!links.isEmpty && links.values.allSatisfy { $0.connection.connectionState == .connected })
+        reportProgress()
     }
 
     private func fail(_ message: String) {
@@ -213,7 +247,6 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     }
 
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
-        guard newState == .complete else { return }
         Task { @MainActor in
             if let link = self.links.values.first(where: { $0.connection === peerConnection }) {
                 self.publish(link)

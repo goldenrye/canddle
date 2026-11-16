@@ -45,6 +45,8 @@ TOKEN = "group-test-" + "a" * 40
         "rtc-group",
         "rtc-direct",
         "rtc-legacy-relay",
+        "rtc-legacy-cold-start",
+        "rtc-legacy-direct",
     ],
 )
 async def test_native_group(mode, tmp_path):

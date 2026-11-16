@@ -37,6 +37,80 @@ struct WebRTCSession {
     let servers: [CallICEServer]
 }
 
+enum WebRTCSetupStage: String {
+    case waitingForOffer = "RTC_WAIT_OFFER"
+    case applyingRemote = "RTC_REMOTE_SDP"
+    case creatingLocal = "RTC_LOCAL_SDP"
+    case gathering = "RTC_GATHERING"
+    case sending = "RTC_SIGNAL_SEND"
+    case waitingForAnswer = "RTC_WAIT_ANSWER"
+    case connectivity = "RTC_CONNECTIVITY"
+
+    var status: String {
+        switch self {
+        case .waitingForOffer: return "Waiting for the other device's media offer."
+        case .applyingRemote: return "Applying the verified media description."
+        case .creatingLocal: return "Creating the media description."
+        case .gathering: return "Gathering network routes (ICE/TURN)."
+        case .sending: return "Sending the signed media description."
+        case .waitingForAnswer: return "Waiting for the other device's media answer."
+        case .connectivity: return "Checking the media route and encryption."
+        }
+    }
+
+    var advice: String {
+        switch self {
+        case .waitingForOffer, .waitingForAnswer:
+            return "Check the error on the other phone; its audio setup or TURN gathering may be stalled."
+        case .gathering:
+            return "Check TURN DNS, credentials and listener access. Gathering did not finish before the deadline."
+        case .connectivity:
+            return "Descriptions were exchanged, but media is not connected. Check TURN public-IP mapping "
+                + "and firewall access, including the UDP relay-port range."
+        case .sending: return "The signed description could not be delivered through the relay."
+        case .applyingRemote, .creatingLocal: return "The native WebRTC negotiation did not complete."
+        }
+    }
+}
+
+/// Redacted setup state for diagnosis. Never includes SDP, addresses or credentials.
+struct WebRTCSetupProgress {
+    let isOfferer: Bool
+    let localReady: Bool
+    let localDelivered: Bool
+    let remoteReceived: Bool
+    let remoteApplied: Bool
+    let gatheringComplete: Bool
+
+    var stage: WebRTCSetupStage {
+        if !isOfferer && !remoteReceived { return .waitingForOffer }
+        if remoteReceived && !remoteApplied { return .applyingRemote }
+        if !localReady { return .creatingLocal }
+        if !gatheringComplete { return .gathering }
+        if !localDelivered { return .sending }
+        if !remoteReceived { return .waitingForAnswer }
+        return .connectivity
+    }
+
+    static func candidateSummary(_ sdp: String?) -> String {
+        var counts = ["host": 0, "srflx": 0, "relay": 0]
+        for line in (sdp ?? "").components(separatedBy: .newlines) where line.hasPrefix("a=candidate:") {
+            let fields = line.split(separator: " ")
+            if let index = fields.firstIndex(of: "typ"), index + 1 < fields.count {
+                let type = String(fields[index + 1])
+                if counts[type] != nil { counts[type, default: 0] += 1 }
+            }
+        }
+        return "host=\(counts["host"]!), srflx=\(counts["srflx"]!), relay=\(counts["relay"]!)"
+    }
+
+    func failure(localSDP: String?, remoteSDP: String?) -> String {
+        "[\(stage.rawValue)] \(stage.status) \(stage.advice)\n"
+            + "Local SDP candidates: \(Self.candidateSummary(localSDP)). "
+            + "Remote SDP candidates: \(Self.candidateSummary(remoteSDP))."
+    }
+}
+
 /// Signs the entire SDP, including ICE credentials and DTLS fingerprint, to the
 /// exact admitted pair and fresh roster epoch. No unauthenticated SDP reaches WebRTC.
 struct WebRTCSignal {

@@ -18,8 +18,24 @@ struct LobbyView: View {
                 .accessibilityIdentifier("lobbyAnnounce")
                 .disabled(lobby.sending || (lobby.active && !lobby.online))
             } footer: {
-                Text(lobby.preferWebRTC ? "WebRTC audio. Only updated apps can join."
+                Text(lobby.preferWebRTC
+                     ? (lobby.online && !lobby.webRTCSupported
+                        ? "WebRTC is unavailable on this relay. You can start a legacy call."
+                        : "WebRTC audio. Only updated apps can join.")
                      : "Legacy audio over TCP. Compatible with older apps.")
+            }
+            .confirmationDialog("WebRTC is unavailable on this relay", isPresented: Binding(
+                get: { lobby.pendingLegacyCall != nil },
+                set: { if !$0 { lobby.dismissLegacyCallRequest() } }
+            ), titleVisibility: .visible, presenting: lobby.pendingLegacyCall) { request in
+                Button(request.target == nil ? "Start legacy group call" : "Start legacy individual call") {
+                    lobby.confirmLegacyCall(request)
+                }.accessibilityIdentifier("confirmLegacyCall")
+                Button("Cancel", role: .cancel) { lobby.dismissLegacyCallRequest() }
+            } message: { _ in
+                Text("Use the existing encrypted TCP audio for this call? Verification and admission stay "
+                     + "the same, but audio may still be choppy. Your WebRTC setting will stay on. "
+                     + "To use WebRTC, configure TURN on the relay.")
             }
             if lobby.online && !lobby.offers.isEmpty {
                 Section("Available calls") {

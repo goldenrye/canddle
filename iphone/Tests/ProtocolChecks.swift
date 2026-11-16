@@ -8,7 +8,37 @@ struct ProtocolChecks {
         throw NSError(domain: "Expected rejection", code: 1)
     }
 
+    static func webRTCSetupChecks() {
+        let cases: [(Bool, Bool, Bool, Bool, Bool, Bool, WebRTCSetupStage)] = [
+            (false, false, false, false, false, false, .waitingForOffer),
+            (false, false, false, true, false, false, .applyingRemote),
+            (true, false, false, false, false, false, .creatingLocal),
+            (true, true, false, false, false, false, .gathering),
+            (true, true, false, false, false, true, .sending),
+            (true, true, true, false, false, true, .waitingForAnswer),
+            (true, true, true, true, true, true, .connectivity),
+            (false, true, true, true, true, true, .connectivity)
+        ]
+        let sdp = "a=ice-pwd:secret-value\r\n"
+            + "a=candidate:1 1 udp 123 192.0.2.10 1234 typ host\r\n"
+            + "a=candidate:2 1 udp 123 192.0.2.11 1235 typ srflx\r\n"
+            + "a=candidate:3 1 udp 123 192.0.2.12 1236 typ relay\r\n"
+            + "a=candidate:4 1 udp 123 192.0.2.13 1237 typ\r\n"
+        precondition(WebRTCSetupProgress.candidateSummary(sdp) == "host=1, srflx=1, relay=1")
+        precondition(WebRTCSetupProgress.candidateSummary(nil) == "host=0, srflx=0, relay=0")
+        for item in cases {
+            let progress = WebRTCSetupProgress(
+                isOfferer: item.0, localReady: item.1, localDelivered: item.2,
+                remoteReceived: item.3, remoteApplied: item.4, gatheringComplete: item.5)
+            precondition(progress.stage == item.6)
+            let failure = progress.failure(localSDP: sdp, remoteSDP: nil)
+            precondition(failure.contains("[\(item.6.rawValue)]"))
+            precondition(!failure.contains("192.0.2.") && !failure.contains("secret-value"))
+        }
+    }
+
     static func main() throws {
+        webRTCSetupChecks()
         let invite = try CallInvitation.generate()
         let parsed = try CallInvitation(invite.text)
         precondition(parsed.text == invite.text)

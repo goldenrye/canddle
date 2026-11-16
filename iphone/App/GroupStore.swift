@@ -4,11 +4,17 @@ import Foundation
 
 @MainActor
 final class GroupStore: ObservableObject {
+    struct LegacyCallRequest {
+        let target: String?
+        fileprivate let generation: UUID
+    }
+
     @Published var name = "My iPhone"
     @Published var autoAcceptVerifiedDevices = false
     var webRTCAvailable = false
     @Published var preferWebRTC = false
     @Published private(set) var webRTCSupported = false
+    @Published private(set) var pendingLegacyCall: LegacyCallRequest?
     private var iceServers: [CallICEServer] = []
     private(set) var webRTCSignals: [WebRTCSignal] = []
     var onWebRTCSessionChanged: ((WebRTCSession?) -> Void)?
@@ -148,7 +154,6 @@ final class GroupStore: ObservableObject {
                 do {
                     try await relay.openLobby(identity: key, name: sessionName, group: true)
                     guard generation == id else { return }
-                    online = true
                     directCallsSupported = relay.supportsDirectCalls
                     if directCallsSupported {
                         try await relay.groupSend(["type": "direct-enable"])
@@ -159,10 +164,11 @@ final class GroupStore: ObservableObject {
                     if presenceSupported {
                         try await relay.groupSend(["type": "presence-subscribe"])
                     }
-                    status = "Online. Start a group call or call a member."
                     if pushToken != nil {
                         try await relay.groupSend(["type": "push-capabilities"])
                     }
+                    online = true
+                    status = "Online. Start a group call or call a member."
                     heartbeat = Task {
                         do {
                             while !Task.isCancelled {
@@ -243,6 +249,7 @@ final class GroupStore: ObservableObject {
         let endedCall = ownOffer?.id ?? joining?.offer.id
         deadline?.cancel(); deadline = nil
         ownOffer = nil; joining = nil; confirmed = false
+        pendingLegacyCall = nil
         members = []; candidates = []; ignored = []; departed = []
         blockedAutomaticAdmissions = []
         ephemeral = nil; roster = nil; proposed = nil; cipher = nil
@@ -292,17 +299,36 @@ final class GroupStore: ObservableObject {
     }
 
     func announce(target: String? = nil) {
+        announce(target: target, webRTC: preferWebRTC)
+    }
+
+    func dismissLegacyCallRequest() {
+        pendingLegacyCall = nil
+    }
+
+    func confirmLegacyCall(_ request: LegacyCallRequest) {
+        // The dialog can dismiss before its button action runs. Use its captured
+        // request, but never carry a confirmation across relay reconnections.
+        guard generation == request.generation else { return }
+        pendingLegacyCall = nil
+        announce(target: request.target, webRTC: false)
+    }
+
+    private func announce(target: String?, webRTC: Bool) {
         guard online, !waiting, !inCall, !sending, let signing else { return }
-        guard !preferWebRTC || webRTCSupported else {
-            status = "Enable WebRTC/TURN on the relay, or turn off WebRTC audio in Settings."; return
-        }
         guard target == nil || directCallsSupported else {
             status = "Upgrade the relay to make individual calls."; return
         }
+        guard !webRTC || webRTCSupported else {
+            pendingLegacyCall = LegacyCallRequest(target: target, generation: generation)
+            status = "WebRTC is unavailable on this relay. Choose Start legacy call to continue."
+            return
+        }
+        pendingLegacyCall = nil
         do {
             let key = Curve25519.KeyAgreement.PrivateKey()
             let offer = try LobbyOffer.create(identity: signing, name: sessionName, ephemeral: key,
-                                              target: target, webRTC: preferWebRTC)
+                                              target: target, webRTC: webRTC)
             ephemeral = key; ownOffer = offer
             members = [GroupMember(message: offer.message)]
             status = target == nil
@@ -318,6 +344,7 @@ final class GroupStore: ObservableObject {
               !offer.usesWebRTC || webRTCSupported,
               offer.target == nil || offer.target == ownIdentity,
               offers.contains(where: { $0.id == offer.id }) else { return }
+        pendingLegacyCall = nil
         do {
             let key = Curve25519.KeyAgreement.PrivateKey()
             let request = try LobbyRequest.create(offer: offer, identity: signing, name: sessionName, ephemeral: key)
