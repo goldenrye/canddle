@@ -515,6 +515,11 @@ budget with a 100-frame burst, 1024-byte message limit, bounded WebSocket queues
 bounded sends, wait/call timeouts, and ping-based liveness. Audio device queues
 hold at most five frames per direction. Full queues discard the oldest
 untransmitted/unplayed audio. Encrypted stream counters remain contiguous.
+The iPhone group/individual receive mixer separately holds at most eight decoded
+frames per speaker, with a three-to-six-frame priming target. Overflow discards
+already authenticated audio, never skips ciphertext sequence validation. The
+speaker scheduling target is three frames within the five-frame device cap.
+Membership changes clear these buffers; no old-epoch speech is retained.
 
 These controls do not stop network floods, TLS exhaustion, or cost attacks.
 Use security-group restrictions and protect the relay token.

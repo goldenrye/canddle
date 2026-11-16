@@ -46,7 +46,12 @@ final class AudioBuffer: @unchecked Sendable {
         return true
     }
 
-    func played() {
+    var playbackFramesNeeded: Int {
+        lock.lock(); defer { lock.unlock() }
+        return stopped ? 0 : max(0, 3 - playbackCount)
+    }
+
+    func rendered() {
         lock.lock(); defer { lock.unlock() }
         playbackCount = max(0, playbackCount - 1)
     }
@@ -348,6 +353,15 @@ final class AudioIO {
         return try queue.pop()
     }
 
+    func fillPlayback(_ nextFrame: () -> Data) throws {
+        guard try ensureRunning() else { return }
+        // Follow audio rendering instead of assuming task wakeups
+        // occur every 20 ms. Never consume the mixer while the player is full.
+        for _ in 0..<queue.playbackFramesNeeded {
+            try play(nextFrame())
+        }
+    }
+
     func play(_ frame: Data) throws {
         guard try ensureRunning() else { return }
         guard frame.count == 640 else {
@@ -356,7 +370,7 @@ final class AudioIO {
         guard queue.reservePlayback() else { return }
         guard let buffer = AVAudioPCMBuffer(pcmFormat: wireFormat, frameCapacity: 320),
               let samples = buffer.floatChannelData?[0] else {
-            queue.played()
+            queue.rendered()
             throw AudioRuntimeError(detail: "Could not allocate the speaker playback buffer.")
         }
         buffer.frameLength = 320
@@ -366,7 +380,7 @@ final class AudioIO {
             samples[i] = Float(Int16(bitPattern: bits)) / 32768
         }
         let queue = queue
-        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in queue.played() }
+        player.scheduleBuffer(buffer, completionCallbackType: .dataRendered) { _ in queue.rendered() }
     }
 
     func mute(_ value: Bool) { muted = value; queue.mute(value) }

@@ -374,12 +374,9 @@ final class CallStore: ObservableObject {
                         throw CancellationError()
                     }
                     group.addTask { @MainActor in
-                        let clock = ContinuousClock()
-                        var next = clock.now
                         while !Task.isCancelled {
-                            try audio.play(self.lobby.mixedFrame())
-                            next = max(next.advanced(by: .milliseconds(20)), clock.now)
-                            try await clock.sleep(until: next)
+                            try audio.fillPlayback { self.lobby.mixedFrame() }
+                            try await Task.sleep(nanoseconds: 5_000_000)
                         }
                         throw CancellationError()
                     }

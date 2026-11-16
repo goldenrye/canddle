@@ -40,6 +40,7 @@ struct GroupChecks {
     @MainActor static func main() async {
         do {
             let input = try JSONDecoder().decode(Input.self, from: FileHandle.standardInput.readDataToEndOfFile())
+            try jitterChecks()
             try cryptoChecks()
             let root = try input.root.flatMap { Data(base64Encoded: $0) }.map { try RelaySettings.certificate($0) }
             let settings = try RelaySettings(address: input.address, token: input.token,
@@ -493,11 +494,63 @@ struct GroupChecks {
         try rejects { _ = try third.open(falseEpoch) }
         var mixer = GroupMixer()
         mixer.reset(["one", "two"])
-        for _ in 0..<8 { try mixer.push(pcm(20000), from: "one") }
-        try mixer.push(pcm(20000), from: "two")
-        precondition(mixer.mix() == pcm(32767))
-        for _ in 0..<4 { precondition(mixer.mix() == pcm(20000)) }
+        for _ in 0..<10 { try mixer.push(pcm(20000), from: "one") }
+        for _ in 0..<3 { try mixer.push(pcm(20000), from: "two") }
+        precondition(mixer.droppedFrames == 2)
+        for _ in 0..<3 { precondition(mixer.mix() == pcm(32767)) }
+        for _ in 0..<5 { precondition(mixer.mix() == pcm(20000)) }
         precondition(mixer.mix() == VoiceProtocol.silence)
+    }
+
+    static func jitterChecks() throws {
+        var mixer = GroupMixer()
+        mixer.reset(["speaker"])
+        // Delivery comes in bursts, but the speaker must receive a continuous
+        // sequence after priming rather than alternating speech and silence.
+        for tick in 0..<92 {
+            if tick == 0 { try mixer.push(pcm(1), from: "speaker") }
+            if tick == 2 {
+                try mixer.push(pcm(2), from: "speaker")
+                try mixer.push(pcm(3), from: "speaker")
+            }
+            if tick >= 5 && (tick - 5) % 3 == 0 {
+                for value in (tick - 1)...(tick + 1) {
+                    try mixer.push(pcm(UInt16(value)), from: "speaker")
+                }
+            }
+            let frame = mixer.mix()
+            precondition(frame == (tick < 2 ? VoiceProtocol.silence : pcm(UInt16(tick - 1))))
+        }
+        precondition(mixer.underruns == 0 && mixer.droppedFrames == 0)
+        // Repeated empty ticks must neither replay old speech nor repeatedly
+        // increase the target. One underrun raises the next reserve to 4 frames.
+        for _ in 0..<50 { precondition(mixer.mix() == VoiceProtocol.silence) }
+        precondition(mixer.underruns == 1)
+        for value in 1...3 {
+            try mixer.push(pcm(UInt16(value)), from: "speaker")
+            precondition(mixer.mix() == VoiceProtocol.silence)
+        }
+        try mixer.push(pcm(4), from: "speaker")
+        precondition(mixer.mix() == pcm(1))
+        for value in 2...4 { precondition(mixer.mix() == pcm(UInt16(value))) }
+        // Further gaps raise the reserve, but never beyond six frames.
+        for target in [5, 6, 6] {
+            precondition(mixer.mix() == VoiceProtocol.silence)
+            for value in 1...target {
+                try mixer.push(pcm(UInt16(value)), from: "speaker")
+                precondition(mixer.mix() == (value == target ? pcm(1) : VoiceProtocol.silence))
+            }
+            for value in 2...target { precondition(mixer.mix() == pcm(UInt16(value))) }
+        }
+        mixer.reset(["replacement"])
+        precondition(mixer.underruns == 0 && mixer.droppedFrames == 0)
+        for _ in 0..<10 { precondition(mixer.mix() == VoiceProtocol.silence) }
+        try rejects { try mixer.push(pcm(1), from: "speaker") }
+        try rejects { try mixer.push(Data(), from: "replacement") }
+        // Overflow retains recent audio, with no unbounded catch-up backlog.
+        for value in 1...20 { try mixer.push(pcm(UInt16(value)), from: "replacement") }
+        precondition(mixer.droppedFrames == 12)
+        for value in 13...20 { precondition(mixer.mix() == pcm(UInt16(value))) }
     }
 
     static func rejects(_ operation: () throws -> Void) throws {

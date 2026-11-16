@@ -302,16 +302,32 @@ Native tests exercise the recovery policy with a simulated engine; physical
 voice-processing route changes still require device acceptance testing.
 
 Capture and scheduled playback queues are bounded to five frames. Full capture
-queues discard old unsent audio; full playback queues discard incoming audio.
+queues discard old unsent audio; the legacy playback path drops incoming audio
+when full. Group and individual playback instead top up a three-frame (60 ms)
+speaker reserve based on audio-render completion, checking every 5 ms. A late
+task wakeup replenishes all missing slots without draining the mixer when full.
+This avoids relying on a main-actor task waking precisely every 20 ms, although
+UI stalls longer than the reserve can still interrupt audio.
 Muting clears queued microphone frames and sends encrypted silence. Previously
 sent frames cannot be recalled.
 
-Group playback mixes one frame per speaker every 20 ms with saturation to PCM16.
-Each speaker has a five-frame queue; missing frames contribute silence.
+Group and individual playback mix 20 ms frames with saturation to PCM16. Each
+speaker starts with a three-frame receive target, raised by one after an underrun
+up to six frames (120 ms). Playout waits for that reserve after a gap, with a
+bounded wait for short/sparse streams. The per-speaker queue holds at most eight
+frames (160 ms); overflow drops the oldest decoded audio. Missing audio contributes
+silence, not repeated speech. Receive buffering and the speaker reserve add
+latency in exchange for smoother playout; they do not reconstruct missing speech.
 Membership changes discard queued old-epoch audio and create fresh media keys
 and counters. A brief gap during a join/leave is possible.
 
-This is not an adaptive real-time transport: WebSocket/TCP packet loss can
+These changes are client-only and preserve the existing encrypted wire format.
+Update both iPhones for improved receiving audio in both directions; no relay
+upgrade is needed for this buffering change. Synthetic tests cover bursty
+delivery, bounded rebuffering, overflow, epoch resets and speaker-queue refill.
+They do not establish listening quality on a physical iPhone.
+
+This is still not a full real-time media transport: WebSocket/TCP packet loss can
 cause delay. Five seconds without microphone frames or a blocked send ends the
 local call. Manual calls also end after ten seconds without received audio.
 Group signaling has a 45-second receive timeout, kept alive by 15-second heartbeats.

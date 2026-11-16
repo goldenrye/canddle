@@ -5,6 +5,7 @@ import Foundation
 struct AudioChecks {
     @MainActor static func main() throws {
         try recoveryChecks()
+        playbackChecks()
         let target = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
         for rate in [8000.0, 16000, 44100, 48000] {
             for channels: AVAudioChannelCount in [1, 2] {
@@ -82,7 +83,27 @@ struct AudioChecks {
             _ = try bounded.pop()
             preconditionFailure("Stopped capture must not resume")
         } catch is AudioRuntimeError {}
-        print("PASS audio: conversion, queues, bounded engine recovery, interruption and shutdown gates")
+        print("PASS audio: conversion, playback reserve, queues, bounded engine recovery, interruption and shutdown gates")
+    }
+
+    static func playbackChecks() {
+        let queue = AudioBuffer()
+        precondition(queue.playbackFramesNeeded == 3)
+        for _ in 0..<queue.playbackFramesNeeded { precondition(queue.reservePlayback()) }
+        precondition(queue.playbackFramesNeeded == 0)
+        // A late wakeup refills two rendered frames, not just one clock tick.
+        queue.rendered()
+        queue.rendered()
+        precondition(queue.playbackFramesNeeded == 2)
+        for _ in 0..<queue.playbackFramesNeeded { precondition(queue.reservePlayback()) }
+        precondition(queue.playbackFramesNeeded == 0)
+        for _ in 0..<3 { queue.rendered() }
+        precondition(queue.playbackFramesNeeded == 3)
+        for _ in 0..<5 { precondition(queue.reservePlayback()) }
+        precondition(!queue.reservePlayback() && queue.playbackFramesNeeded == 0)
+        queue.stop()
+        for _ in 0..<10 { queue.rendered() }
+        precondition(queue.playbackFramesNeeded == 0 && !queue.reservePlayback())
     }
 
     @MainActor static func recoveryChecks() throws {

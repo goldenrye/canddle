@@ -168,9 +168,10 @@ real local WebSocket relay. Synthetic tests do not record or play real sound.
   The relay sends about **240 MB/hour per active two-person call**, plus transport
   overhead; ingress is similar. This is not an AWS cost quote.
 - Audio travels over TCP/WebSockets, so packet loss can cause head-of-line
-  blocking and audible delay. Queues are bounded, but this is not an adaptive
-  jitter buffer. A production media transport should use a reviewed real-time
-  stack with congestion control.
+  blocking and audible delay. The iPhone group/individual path uses bounded
+  receive priming and a speaker reserve to tolerate short bursts and scheduling
+  delays; the desktop/manual path has simple bounded queues. A production media
+  transport should use a reviewed real-time stack with congestion control.
 - Use headphones; no echo cancellation, automatic gain, or noise suppression.
 - The default relay allows 32 connected sockets, a two-minute wait, and a
   one-hour call. These are safety limits, not measured capacity guarantees.

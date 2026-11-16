@@ -160,28 +160,66 @@ struct GroupCipher {
     }
 }
 
-/// One 20-ms frame per speaker per playout tick; bounded queues prevent a late
-/// speaker from adding unlimited latency. Silence fills missing contributions.
+/// Prime each speaker before playout and rebuild its reserve after a gap.
+/// All limits are in 20-ms frames; long stalls still contribute silence.
 struct GroupMixer {
-    private var queues: [String: [Data]] = [:]
+    private struct Speaker {
+        var frames: [Data] = []
+        var target = 3
+        var primingTicks = 0
+        var playing = false
+        var underruns = 0
+        var dropped = 0
+
+        mutating func push(_ frame: Data) {
+            if frames.count == 8 {
+                frames.removeFirst()
+                dropped += 1
+            }
+            frames.append(frame)
+        }
+
+        mutating func pop() -> Data? {
+            if !playing {
+                guard !frames.isEmpty else { return nil }
+                primingTicks += 1
+                // The tick bound also lets short/sparse streams finish playing.
+                guard frames.count >= target || primingTicks >= target else { return nil }
+                playing = true
+                primingTicks = 0
+            }
+            guard !frames.isEmpty else {
+                underruns += 1
+                target = min(6, target + 1)
+                playing = false
+                return nil
+            }
+            return frames.removeFirst()
+        }
+    }
+
+    private var queues: [String: Speaker] = [:]
+    var underruns: Int { queues.values.reduce(0) { $0 + $1.underruns } }
+    var droppedFrames: Int { queues.values.reduce(0) { $0 + $1.dropped } }
 
     mutating func reset(_ identities: [String]) {
-        queues = Dictionary(uniqueKeysWithValues: identities.map { ($0, []) })
+        queues = Dictionary(uniqueKeysWithValues: identities.map { ($0, Speaker()) })
     }
 
     mutating func push(_ frame: Data, from peer: String) throws {
         guard frame.count == VoiceProtocol.frameSize, var queue = queues[peer] else { throw VoiceError.packet }
-        if queue.count >= 5 { queue.removeFirst() }
-        queue.append(frame)
+        queue.push(frame)
         queues[peer] = queue
     }
 
     mutating func mix() -> Data {
         var sums = [Int](repeating: 0, count: 320)
         for peer in Array(queues.keys) {
-            guard var queue = queues[peer], !queue.isEmpty else { continue }
-            let bytes = [UInt8](queue.removeFirst())
+            guard var queue = queues[peer] else { continue }
+            let frame = queue.pop()
             queues[peer] = queue
+            guard let frame else { continue }
+            let bytes = [UInt8](frame)
             for index in 0..<320 {
                 sums[index] += Int(Int16(bitPattern: UInt16(bytes[index * 2]) | UInt16(bytes[index * 2 + 1]) << 8))
             }
