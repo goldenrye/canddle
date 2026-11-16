@@ -12,6 +12,9 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         var negotiation: Task<Void, Never>?
         var publishing: Task<Void, Never>?
         var deadline: Task<Void, Never>?
+        var gatherCutoff: Task<Void, Never>?
+        var gatherCutoffPassed = false
+        var relayGathered = false
         var localSent = false
         var localDelivered = false
         var remoteSet = false
@@ -115,7 +118,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                         let offer = try await pc.offer(for: constraints)
                         guard current(link) else { return }
                         try await pc.setLocalDescription(offer)
-                        if current(link) { publish(link) }
+                        if current(link) { localDescriptionSet(link) }
                     } catch { if current(link) { fail("WebRTC offer could not be created.") } }
                 }
             }
@@ -141,18 +144,45 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                     let answer = try await link.connection.answer(for: constraints)
                     guard current(link) else { return }
                     try await link.connection.setLocalDescription(answer)
-                    if current(link) { publish(link) }
+                    if current(link) { localDescriptionSet(link) }
                 }
             } catch { if current(link) { fail("Authenticated WebRTC negotiation failed.") } }
         }
     }
 
+    /// Seconds to wait for full ICE gathering before sending the candidates found so far.
+    /// libwebrtc can leave gathering incomplete indefinitely when one TURN transport or
+    /// network interface is silent, even though usable candidates already exist.
+    static let gatherCutoffSeconds: UInt64 = 4
+
+    private func localDescriptionSet(_ link: Link) {
+        link.gatherCutoff?.cancel()
+        link.gatherCutoff = Task {
+            do {
+                try await Task.sleep(nanoseconds: Self.gatherCutoffSeconds * 1_000_000_000)
+                guard current(link) else { return }
+                link.gatherCutoffPassed = true
+                publish(link)
+            } catch {}
+        }
+        publish(link)
+    }
+
+    private func gatheringReady(_ link: Link) -> Bool {
+        if link.connection.iceGatheringState == .complete { return true }
+        // Non-trickle: once a TURN relay candidate exists (or the cutoff passes with at
+        // least one candidate), later candidates would add little and may never arrive.
+        let hasCandidate = link.connection.localDescription?.sdp.contains("a=candidate:") == true
+        return hasCandidate && (link.relayGathered || link.gatherCutoffPassed)
+    }
+
     private func publish(_ link: Link) {
         reportProgress()
         guard current(link), !link.localSent, let session,
-              link.connection.iceGatheringState == .complete,
+              gatheringReady(link),
               let description = link.connection.localDescription else { return }
         link.localSent = true
+        link.gatherCutoff?.cancel(); link.gatherCutoff = nil
         let epoch = session.roster.message["epoch"]!
         // Non-trickle ICE sends one bounded, signed description per directed
         // pair/epoch, including all candidates, instead of unsigned candidate updates.
@@ -176,7 +206,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             localDelivered: link.localDelivered,
             remoteReceived: link.remoteSet,
             remoteApplied: link.remoteApplied,
-            gatheringComplete: link.connection.iceGatheringState == .complete)
+            gatheringComplete: link.localSent || link.connection.iceGatheringState == .complete)
     }
 
     private func reportProgress() {
@@ -233,6 +263,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             link.negotiation?.cancel()
             link.publishing?.cancel()
             link.deadline?.cancel()
+            link.gatherCutoff?.cancel()
             link.connection.close()
         }
     }
@@ -261,7 +292,17 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        guard candidate.sdp.contains(" typ relay") else { return }
+        Task { @MainActor in
+            // Let the description pick up the new candidate before publishing it.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if let link = self.links.values.first(where: { $0.connection === peerConnection }) {
+                link.relayGathered = true
+                self.publish(link)
+            }
+        }
+    }
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         dataChannel.close()

@@ -129,9 +129,10 @@ the relay checks TURN configuration syntax, not the running service or firewall.
 The call screen now reports its current media-setup stage. Timeout alerts include
 a stage code and redacted local/remote SDP candidate counts, not SDP, IPs or secrets:
 
-- `RTC_GATHERING`: gathering did not finish. This non-trickle implementation waits
-  for all candidate gathering before sending SDP. A silent TURN endpoint can block
-  that even when host candidates already exist. Check listener access, DNS and
+- `RTC_GATHERING`: no candidates were gathered. This non-trickle implementation
+  sends its SDP once gathering completes, once a TURN relay candidate exists, or
+  after a 4-second cutoff with whatever candidates exist, because a silent TURN
+  endpoint or interface can otherwise leave gathering incomplete indefinitely. Check listener access, DNS and
   TURN responses; a zero relay count does not by itself prove bad credentials.
 - `RTC_WAIT_OFFER` / `RTC_WAIT_ANSWER`: the other device has not supplied its
   description. Check its error too; it may be stalled in gathering or audio setup.
