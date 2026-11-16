@@ -50,30 +50,39 @@ struct CallView: View {
         NavigationStack {
             List {
                 Section {
-                    HStack(spacing: 12) {
-                        if call.connected {
-                            Image(systemName: "waveform").font(.title2).foregroundStyle(.teal)
-                        } else {
-                            Image("BrandLogo").resizable().scaledToFit()
-                                .frame(width: 44, height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .accessibilityHidden(true)
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .top, spacing: 14) {
+                        Image("BrandLogo").resizable().scaledToFit()
+                            .frame(width: 48, height: 48)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 8) {
                             Text(call.connected ? "Encrypted call" : (lobby.online ? "You're online" : "Private group calls"))
-                                .font(.headline)
+                                .font(.title3.weight(.semibold))
                             Text(call.busy ? call.status : lobby.status)
-                                .font(.callout).foregroundStyle(.secondary)
+                                .font(.subheadline).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("lobbyStatus")
                             if call.busy && !call.pairing {
-                                CallMediaIndicator(call: call)
+                                CallMediaIndicator(quality: call.mediaQuality, connected: call.connected)
                                     .accessibilityHint("Group quality reflects the worst measured link. Expand a participant for details.")
                             }
                         }
-                        if (call.busy && !call.connected) || (lobby.active && !lobby.online) {
-                            ProgressView().accessibilityLabel("Connecting")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        ZStack {
+                            if (call.busy && !call.connected) || (lobby.active && !lobby.online) {
+                                ProgressView().accessibilityLabel("Connecting")
+                            } else {
+                                Image(systemName: call.connected ? "lock.shield.fill" : "circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(lobby.online || call.connected ? Color.teal : .secondary)
+                                    .accessibilityHidden(true)
+                            }
                         }
-                    }.padding(.vertical, 6)
+                        .frame(width: 20, height: 24)
+                    }.padding(.vertical, 12)
+                        .listRowBackground(
+                            LinearGradient(colors: [Color(.secondarySystemGroupedBackground), .teal.opacity(0.08)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
                 }
                 if !configured {
                     Section {
@@ -91,6 +100,8 @@ struct CallView: View {
                               callMember: { call.openLobby(startCall: true, target: $0) })
                 }
             }
+            .listStyle(.insetGrouped)
+            .tint(.teal)
             .navigationTitle("Calls")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {

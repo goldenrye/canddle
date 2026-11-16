@@ -29,6 +29,7 @@ TOKEN = "group-test-" + "a" * 40
         "tls",
         "legacy-presence",
         "rename-directory",
+        "quiet-presence",
         "auto-enabled",
         "auto-disabled",
         "auto-unverified",
@@ -58,6 +59,19 @@ async def test_native_group(mode, tmp_path):
         else None
     )
     relay = Relay(TOKEN, turn=turn)
+    if mode == "quiet-presence":
+        original_publish = relay.group.publish_presence
+
+        def repeated_presence():
+            original_publish()
+            for peer, message in list(relay.group.presence_subscribers.items()):
+                if message:
+                    for _ in range(3):
+                        peer.emit(message)
+                    # A changed flag confirms the native client consumed all duplicates.
+                    peer.emit({**message, "truncated": "yes"})
+
+        relay.group.publish_presence = repeated_presence
     if mode == "rtc-no-trickle":
         original_challenge = relay.group.challenge
         relay.group.challenge = lambda nonce: {

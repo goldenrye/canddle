@@ -116,7 +116,8 @@ final class GroupStore: ObservableObject {
         }.sorted {
             if $0.id == localIdentity { return $1.id != localIdentity }
             if $1.id == localIdentity { return false }
-            if $0.name != $1.name { return $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            let order = $0.name.localizedStandardCompare($1.name)
+            if order != .orderedSame { return order == .orderedAscending }
             return $0.id < $1.id
         }
     }
@@ -600,15 +601,18 @@ final class GroupStore: ObservableObject {
         case "presence":
             guard presenceSupported else { throw VoiceError.packet }
             let snapshot = try GroupPresenceSnapshot(message)
-            presence = Dictionary(uniqueKeysWithValues: snapshot.members.map { ($0.id, $0) })
+            let updatedPresence = Dictionary(uniqueKeysWithValues: snapshot.members.map { ($0.id, $0) })
+            if presence != updatedPresence { presence = updatedPresence }
             // Remember a bounded set for this relay during this app session only.
+            var updatedNames = knownNames
             for member in snapshot.members {
-                if knownNames[member.id] != nil || knownNames.count < 128 {
-                    knownNames[member.id] = member.name
+                if updatedNames[member.id] != nil || updatedNames.count < 128 {
+                    updatedNames[member.id] = member.name
                 }
             }
-            presenceReady = true
-            presenceTruncated = snapshot.truncated
+            if knownNames != updatedNames { knownNames = updatedNames }
+            if !presenceReady { presenceReady = true }
+            if presenceTruncated != snapshot.truncated { presenceTruncated = snapshot.truncated }
         case "push-capabilities":
             pushAvailable = message["enabled"] == "yes"
             if pushAvailable, let pushToken, let transport {

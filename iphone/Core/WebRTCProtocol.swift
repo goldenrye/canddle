@@ -482,7 +482,7 @@ struct CallQualityIndicator: Equatable {
     }
 }
 
-struct CallQualityReading {
+struct CallQualityReading: Equatable {
     let link: WebRTCQualityLink
     let received: Date
     static let maximumAge: TimeInterval = 25

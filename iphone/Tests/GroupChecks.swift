@@ -1,3 +1,4 @@
+import Combine
 import CryptoKit
 import Foundation
 
@@ -91,6 +92,20 @@ struct GroupChecks {
             precondition(!clients[1].active)
             defer { clients.forEach { $0.disconnect() } }
             let host = clients[0]
+            if input.mode == "quiet-presence" {
+                var presenceUpdates = 0
+                var nameUpdates = 0
+                let presenceObserver = host.$presence.filter { !$0.isEmpty }.sink { _ in presenceUpdates += 1 }
+                let nameObserver = host.$knownNames.filter { !$0.isEmpty }.sink { _ in nameUpdates += 1 }
+                defer { presenceObserver.cancel(); nameObserver.cancel() }
+                host.connect(settings)
+                try await wait { host.presenceReady && host.presenceTruncated }
+                precondition(presenceUpdates == 1 && nameUpdates == 1,
+                             "Duplicate snapshots must not republish directory state")
+                precondition(host.groupDirectory.first?.state == .online)
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode.hasPrefix("rtc-") {
                 try await webRTCChecks(clients, saved: saved, settings: settings, mode: input.mode)
                 print("PASS group \(input.mode)")

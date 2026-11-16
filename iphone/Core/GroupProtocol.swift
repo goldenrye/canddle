@@ -18,7 +18,7 @@ enum GroupPresenceState: String {
     }
 }
 
-struct GroupPresence: Identifiable {
+struct GroupPresence: Identifiable, Equatable {
     let id: String
     let name: String
     let state: GroupPresenceState

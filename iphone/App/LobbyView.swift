@@ -13,9 +13,12 @@ struct LobbyView: View {
             Section {
                 Button(action: startCall) {
                     Label("Start group call", systemImage: "person.2.fill")
-                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 40)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.teal)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
                 .accessibilityIdentifier("lobbyAnnounce")
                 .disabled(lobby.sending || (lobby.active && !lobby.online))
             } footer: {
@@ -116,7 +119,8 @@ struct LobbyView: View {
                 ForEach(lobby.members) { member in
                     DisclosureGroup {
                         if callBusy && member.id != lobby.ownIdentity {
-                            CallMediaIndicator(call: call, peer: member.id, details: true)
+                            CallMediaIndicator(quality: call.mediaQuality, connected: call.connected,
+                                               peer: member.id, details: true)
                         }
                         Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
                             .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -125,16 +129,23 @@ struct LobbyView: View {
                                 .disabled(lobby.sending || lobby.approving != nil)
                         }
                     } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(member.id == lobby.ownIdentity ? "\(member.name) (you)" : member.name,
-                                  systemImage: member.id == lobby.ownIdentity ? "person.fill" : "person")
-                            if callBusy && member.id != lobby.ownIdentity {
-                                CallMediaIndicator(call: call, peer: member.id)
-                            } else {
-                                Text(lobby.inCall ? "In call" : "Waiting for participants")
-                                    .font(.caption).foregroundStyle(.secondary)
+                        HStack(alignment: .top, spacing: 12) {
+                            MemberAvatar(identity: member.id, isYou: member.id == lobby.ownIdentity)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(member.id == lobby.ownIdentity ? "\(member.name) (you)" : member.name)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                if callBusy && member.id != lobby.ownIdentity {
+                                    CallMediaIndicator(quality: call.mediaQuality, connected: call.connected,
+                                                       peer: member.id)
+                                } else {
+                                    Text(lobby.inCall ? "In call" : "Waiting for participants")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .padding(.vertical, 6)
                     }
                 }
             }
@@ -151,7 +162,8 @@ struct LobbyView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(lobby.groupDirectory) { member in
-                HStack {
+                HStack(alignment: .top, spacing: 12) {
+                    MemberAvatar(identity: member.id, isYou: member.id == lobby.localIdentity)
                     DisclosureGroup {
                         Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
                             .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -165,28 +177,39 @@ struct LobbyView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     } label: {
-                        HStack {
+                        VStack(alignment: .leading, spacing: 5) {
                             Text(member.id == lobby.localIdentity ? "\(member.name) (you)" : member.name)
-                            Spacer()
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
                             Label(member.state.label, systemImage: presenceIcon(member.state))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption)
+                                .foregroundStyle(member.state == .online ? Color.teal : .secondary)
                         }
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                         .accessibilityElement(children: .combine)
                     }
                     .accessibilityIdentifier("groupMember-\(member.id)")
                     if member.id != lobby.localIdentity {
                         Button { callMember(member.id) } label: {
                             Image(systemName: "phone.fill")
+                                .font(.body.weight(.semibold))
                                 .frame(width: 44, height: 44)
+                                .background(.teal.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
                         }
                         .buttonStyle(.borderless)
+                        .tint(.teal)
                         .accessibilityLabel("Call \(member.name)")
                         .accessibilityIdentifier("callMember-\(member.id)")
                         .disabled(callBusy || lobby.waiting || lobby.sending || !lobby.online
                                   || !lobby.directCallsSupported
                                   || [.calling, .joining, .inCall].contains(member.state))
+                    } else {
+                        Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
                     }
                 }
+                .padding(.vertical, 6)
+                .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] + 56 }
             }
         } header: {
             Text("Group members (\(lobby.groupDirectory.count))")
@@ -257,8 +280,29 @@ struct LobbyView: View {
     }
 }
 
+private struct MemberAvatar: View {
+    let identity: String
+    let isYou: Bool
+
+    private var tint: Color {
+        let palette: [Color] = [.teal, .indigo, .blue, .purple, .orange]
+        let index = identity.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
+        return isYou ? .teal : palette[index]
+    }
+
+    var body: some View {
+        Image(systemName: isYou ? "iphone" : "person.fill")
+            .font(.system(size: 19, weight: .medium))
+            .foregroundStyle(tint)
+            .frame(width: 44, height: 44)
+            .background(tint.opacity(0.12), in: Circle())
+            .accessibilityHidden(true)
+    }
+}
+
 struct CallMediaIndicator: View {
-    @ObservedObject var call: CallStore
+    @ObservedObject var quality: CallQualityStore
+    let connected: Bool
     var peer: String? = nil
     var details = false
 
@@ -272,44 +316,32 @@ struct CallMediaIndicator: View {
     }
 
     var body: some View {
-        // Expire cached readings even if no subsequent getStats callback arrives.
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let indicator = call.mediaIndicator(peer: peer, at: context.date)
-            VStack(alignment: .leading, spacing: 6) {
-                if details {
-                    Text(call.mediaIsWebRTC
-                         ? "Audio transport from this iPhone. TURN/TLS is shown as TCP; the other phone's TURN connection may differ."
-                         : "Legacy audio uses TCP. Quality measurements are unavailable.")
-                    if let peer, let reading = call.qualityReadings[peer],
-                       ![.stale, .connecting].contains(indicator.quality) {
-                        Text(metrics(reading.link))
-                        Text("Estimated from recent network and audio statistics, not a guarantee of speech quality.")
-                    } else if call.mediaIsWebRTC {
-                        Text("Measurements arrive about every 10 seconds after a roughly 20-second warm-up. Stale means no fresh report for 25 seconds.")
-                    }
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                        badges(indicator)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(indicator.transport, systemImage: "arrow.up.arrow.down")
-                            qualityBadge(indicator)
-                        }
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Audio transport: \(indicator.transport.replacingOccurrences(of: "?", with: "Unknown")). Connection quality: \(indicator.qualityLabel).")
-                    .accessibilityIdentifier(peer.map { "mediaQuality-\($0)" } ?? "callMediaQuality")
+        let indicator = quality.indicator(peer: peer, legacyConnected: connected)
+        VStack(alignment: .leading, spacing: 6) {
+            if details {
+                Text(quality.snapshot.webRTC
+                     ? "Audio transport from this iPhone. TURN/TLS is shown as TCP; the other phone's TURN connection may differ."
+                     : "Legacy audio uses TCP. Quality measurements are unavailable.")
+                if let peer, let reading = quality.snapshot.readings[peer],
+                   ![.stale, .connecting].contains(indicator.quality) {
+                    Text(metrics(reading.link))
+                    Text("Estimated from recent network and audio statistics, not a guarantee of speech quality.")
+                } else if quality.snapshot.webRTC {
+                    Text("Measurements arrive about every 10 seconds after a roughly 20-second warm-up. Stale means no fresh report for 25 seconds.")
                 }
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(indicator.transport, systemImage: "arrow.up.arrow.down")
+                    qualityBadge(indicator)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Audio transport: \(indicator.transport.replacingOccurrences(of: "?", with: "Unknown")). Connection quality: \(indicator.qualityLabel).")
+                .accessibilityIdentifier(peer.map { "mediaQuality-\($0)" } ?? "callMediaQuality")
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
-    }
-
-    private func badges(_ indicator: CallQualityIndicator) -> some View {
-        HStack(spacing: 12) {
-            Label(indicator.transport, systemImage: "arrow.up.arrow.down")
-            qualityBadge(indicator)
-        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .transaction { $0.animation = nil }
     }
 
     private func qualityBadge(_ indicator: CallQualityIndicator) -> some View {

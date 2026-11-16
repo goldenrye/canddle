@@ -112,6 +112,17 @@ calls** appears below only when there is a group call to join or an individual
 call to answer; there is no empty-call placeholder. Active call controls and
 verification requests remain above the directory during a call.
 
+Member rows use small, consistently sized device/person icons, with the name
+above the status and a separate 44-point call button. Icon colors are decorative,
+not verification or connection-quality signals; trust details remain expandable.
+The same row style is used for active participants.
+
+Quality statistics update only the media indicators, not the main call store.
+There is no repeating one-second display timer: a one-shot expiry marks readings
+stale when needed, and duplicate presence snapshots do not republish the directory.
+Live state changes still appear normally. Check scroll position, expanded rows,
+long names, and accessibility text sizes on a physical iPhone.
+
 The **Group members** list on Calls shows this device, devices seen on the relay
 during this app session, and saved verified peers for the same relay. Statuses are
 **Online**, **Calling**, **Joining**, **In call**, **Not connected**, or **Unknown**.
@@ -361,6 +372,11 @@ xcodebuild -project iphone/Canddle.xcodeproj -scheme Canddle \
 xcrun swiftc -parse-as-library iphone/Core/*.swift \
   iphone/Tests/ProtocolChecks.swift -o /tmp/vpcomm-iphone-checks
 /tmp/vpcomm-iphone-checks
+
+# Media indicator publications and one-shot stale expiry (no audio or network)
+xcrun swiftc -parse-as-library iphone/Core/*.swift iphone/App/CallQualityStore.swift \
+  iphone/Tests/CallQualityChecks.swift -o /tmp/canddle-quality-checks
+/tmp/canddle-quality-checks
 
 # Live Swift/Python encrypted audio and TLS tests
 xcrun swiftc -parse-as-library iphone/Core/*.swift \
