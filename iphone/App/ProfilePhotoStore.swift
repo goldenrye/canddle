@@ -69,7 +69,9 @@ final class ProfilePhotoStore: ObservableObject {
     private func save(contact: Data?, custom: Data?) {
         generation = UUID()
         loading = false
-        let next = max(revision + 1, UInt64(Date().timeIntervalSince1970 * 1000))
+        let (incremented, overflow) = revision.addingReportingOverflow(1)
+        guard !overflow else { error = "Could not update the saved photo revision."; return }
+        let next = max(incremented, UInt64(max(0, Date().timeIntervalSince1970 * 1000)))
         let record = Saved(contact: contact, custom: custom, revision: next)
         guard let encoded = try? JSONEncoder().encode(record) else {
             error = "Could not save the profile photo."

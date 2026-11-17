@@ -35,6 +35,44 @@ review remain release tasks.
 
 Use a relay deployed according to [`../deploy/README.md`](../deploy/README.md).
 
+### Profile Photos
+
+Open **Settings > Profile photo**:
+
+- **Choose your contact photo** lets you select your own contact card once. iOS
+  does not expose the current user's Messages/Phone profile photo automatically.
+  The selected photo is a saved default, not a live link to Contacts.
+- **Choose a custom photo** overrides that default. **Use contact photo instead**
+  restores it; **Remove photo** clears both photos and shares an empty profile.
+- Only the selected image is imported through Apple's system pickers. Canddle
+  does not request full Contacts/Photos access or upload contact names/numbers.
+  Pictures are center-cropped and reduced to a JPEG of at most 160 x 160 pixels
+  and 5 KB, without the original image's GPS or other personal metadata.
+- Photos appear beside member names in the directory and active calls. Sharing
+  requires an upgraded relay and receiving app; older versions retain icons.
+  Updates are coalesced, so changing a photo can take about five seconds to appear.
+
+Photos are visible to the relay operator and other clients with access to that
+relay, not just verified family devices or current call participants. They are
+cosmetic metadata, not end-to-end-encrypted audio or identity verification.
+Sanitized contact/custom thumbnails are saved on this iPhone. The relay holds
+current profiles in memory while devices remain registered (including handoff
+grace); receiving apps keep a bounded in-memory cache until disconnect. Removing
+a photo cannot revoke a copy another person already saved.
+
+Native image/protocol/persistence checks:
+
+```sh
+xcrun swiftc -parse-as-library iphone/Core/*.swift \
+  iphone/App/ProfilePhotoStore.swift iphone/Tests/ProfileChecks.swift \
+  -o /tmp/canddle-profile-checks
+/tmp/canddle-profile-checks
+```
+
+On a signed iPhone, verify selecting a contact with/without a photo, cancelling
+both pickers, choosing an iCloud photo, restoring the contact default, persistence
+after relaunch, and updating/removing the avatar on a second phone.
+
 ### Pair Without Typing a Token
 
 1. Ask your server administrator to enable pairing and run

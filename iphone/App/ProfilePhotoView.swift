@@ -105,17 +105,20 @@ private struct ProfilePhotoPicker: UIViewControllerRepresentable {
         let parent: ProfilePhotoPicker
         init(_ parent: ProfilePhotoPicker) { self.parent = parent }
 
-        func contactPickerDidCancel(_ picker: CNContactPickerViewController) { parent.finished() }
+        nonisolated func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
+            Task { @MainActor in self.parent.finished() }
+        }
 
-        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
-            parent.finished()
+        nonisolated func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
             let thumbnail = contact.isKeyAvailable(CNContactThumbnailImageDataKey) ? contact.thumbnailImageData : nil
-            let full = contact.isKeyAvailable(CNContactImageDataKey) ? contact.imageData : nil
-            guard let data = thumbnail ?? full else {
-                parent.failed("That contact has no available photo. Choose another card or a custom photo.")
-                return
+            let data = thumbnail ?? (contact.isKeyAvailable(CNContactImageDataKey) ? contact.imageData : nil)
+            Task { @MainActor in
+                self.parent.finished()
+                if let data { self.parent.selected(data) }
+                else {
+                    self.parent.failed("That contact has no available photo. Choose another card or a custom photo.")
+                }
             }
-            parent.selected(data)
         }
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {

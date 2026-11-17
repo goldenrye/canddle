@@ -476,6 +476,43 @@ an epoch. Sends time out at three seconds. Group clients send five-second
 heartbeats; the relay retains its 45-second inactivity deadline. Eligible WebRTC
 clients use 15-second receive deadlines during calls. These bounds do not prevent DDoS.
 
+### Optional Profile Photos
+
+The group relay advertises `profiles=1`; only clients sending `profile-subscribe`
+receive photos. Signed `profile` messages contain exactly `type`, `identity`,
+`revision`, `photo`, and `signature`. The Ed25519 transcript purpose is
+`device-profile`, followed by identity, canonical positive UInt64 revision, and
+canonical unpadded base64url JPEG bytes, in that order. The relay requires the
+registered sender's identity, verifies the signature, and rejects rollback or
+conflicting equal revisions. Clients verify the signature independently and ignore
+invalid/stale cosmetic updates without modifying device trust or call admission.
+These revisions are not a durable transparency log; a compromised relay can
+withhold updates or replay an older signed photo to a newly connected client.
+
+Decoded payloads are capped at 5120 bytes and the existing 8192-byte control frame
+limit still applies. Empty photo bytes remove an avatar. The relay checks the
+JPEG envelope but never decodes images; iPhones validate JPEG dimensions (square,
+at most 160 pixels) before decoding shared thumbnails. Imports are limited to
+25 MB / 100 megapixels and re-rendered/re-encoded to remove original metadata.
+The encoder may add nonpersonal format fields such as output dimensions.
+No contact identifiers, names, phone numbers, or original files are uploaded.
+The system contact/photo pickers require no broad address-book/library permission.
+
+Profiles are separate from presence frames, with at most 32 thumbnails in a
+snapshot, bounded per-subscriber revision tracking and a 128-profile client cache.
+Updates have an independent four-message burst / one-per-five-seconds refill;
+excess cosmetic updates are dropped rather than consuming call-control budgets.
+Unchanged profiles are not resent. Relay profile state lives on registered peers,
+is transferred by authenticated handoff, and disappears when registration ends.
+Received profiles are cached only in app memory until disconnect. Sanitized own
+contact/custom thumbnails and a revision are stored in local preferences.
+
+Photos are intentionally visible to the relay operator and all subscribed clients
+on that relay, including unverified devices. They are not E2EE, admission evidence,
+or permission to call. Removing a photo updates connected recipients but cannot
+erase copies they saved. Privacy disclosures for distribution must reflect this
+optional sharing; see [Profile Photos](iphone/README.md#profile-photos).
+
 Optional APNs VoIP delivery and CallKit provide background/lock-screen ringing.
 Apple receives signed public offer metadata, relay URL, recipient public key and
 expiry, but no bearer credentials, private keys or audio. Registrations use
