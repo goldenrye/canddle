@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+                F50000000000000000000001 /* DeviceProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000002; };
+                F50000000000000000000003 /* ProfileImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000004; };
+                F50000000000000000000005 /* ProfilePhotoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000006; };
+                F50000000000000000000007 /* ProfilePhotoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000008; };
                 F30000000000000000000001 /* CallQualityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000002; };
                 F20000000000000000000008 /* WebRTC-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000009; };
                 F20000000000000000000004 /* WebRTCAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000006; };
@@ -41,6 +45,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+                F50000000000000000000002 /* DeviceProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceProfile.swift; sourceTree = "<group>"; };
+                F50000000000000000000004 /* ProfileImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileImage.swift; sourceTree = "<group>"; };
+                F50000000000000000000006 /* ProfilePhotoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilePhotoStore.swift; sourceTree = "<group>"; };
+                F50000000000000000000008 /* ProfilePhotoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilePhotoView.swift; sourceTree = "<group>"; };
                 F30000000000000000000002 /* CallQualityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallQualityStore.swift; sourceTree = "<group>"; };
                 F20000000000000000000009 /* WebRTC-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "WebRTC-LICENSE.txt"; sourceTree = "<group>"; };
                 F20000000000000000000006 /* WebRTCAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCAudio.swift; sourceTree = "<group>"; };
@@ -100,6 +108,8 @@
 		A00000000000000000000020 /* App */ = {
 			isa = PBXGroup;
 			children = (
+                                F50000000000000000000006 /* ProfilePhotoStore.swift */,
+                                F50000000000000000000008 /* ProfilePhotoView.swift */,
                                 F20000000000000000000009 /* WebRTC-LICENSE.txt */,
                                 F20000000000000000000006 /* WebRTCAudio.swift */,
                                 F40000000000000000000002 /* WebRTCTrack.swift */,
@@ -122,6 +132,8 @@
 		A00000000000000000000021 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+                                F50000000000000000000002 /* DeviceProfile.swift */,
+                                F50000000000000000000004 /* ProfileImage.swift */,
                                 F20000000000000000000007 /* WebRTCProtocol.swift */,
 				F00000000000000000000003 /* GroupProtocol.swift */,
 				E00000000000000000000004 /* LobbyProtocol.swift */,
@@ -222,6 +234,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                                F50000000000000000000001 /* DeviceProfile.swift in Sources */,
+                                F50000000000000000000003 /* ProfileImage.swift in Sources */,
+                                F50000000000000000000005 /* ProfilePhotoStore.swift in Sources */,
+                                F50000000000000000000007 /* ProfilePhotoView.swift in Sources */,
                                 F20000000000000000000004 /* WebRTCAudio.swift in Sources */,
                                 F40000000000000000000001 /* WebRTCTrack.swift in Sources */,
                                 F40000000000000000000003 /* LocalNetworkAccess.swift in Sources */,

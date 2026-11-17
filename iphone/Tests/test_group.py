@@ -58,6 +58,8 @@ TOKEN = "group-test-" + "a" * 40
         "rtc-legacy-relay",
         "rtc-legacy-cold-start",
         "rtc-legacy-direct",
+        "profiles",
+        "profiles-old",
     ],
 )
 async def test_native_group(mode, tmp_path):
@@ -67,6 +69,11 @@ async def test_native_group(mode, tmp_path):
         else None
     )
     relay = Relay(TOKEN, turn=turn)
+    if mode == "profiles-old":
+        original_challenge = relay.group.challenge
+        relay.group.challenge = lambda nonce: {
+            key: value for key, value in original_challenge(nonce).items() if key != "profiles"
+        }
     if mode == "rtc-handoff-direct-timeout":
         relay.group.request_refresh = lambda call: None
     if mode == "rtc-handoff-direct-untrusted":

@@ -7,6 +7,7 @@ import time
 
 from .crypto import decode, encode
 from .lobby import Lobby, Peer, name_valid, offer_fields, transcript, verify
+from .profile import validate_profile
 from .webrtc import (
     CANDIDATE_FIELDS,
     QUALITY_LOG,
@@ -49,6 +50,7 @@ class GroupLobby(Lobby):
         return {
             **super().challenge(nonce),
             "presence": "1",
+            "profiles": "1",
             "direct": "1",
             **(
                 {
@@ -97,7 +99,8 @@ class GroupLobby(Lobby):
             raise ValueError("Recovery capacity reached")
         peer = Peer(socket, old.identity, old.name)
         for attr in ("offer", "joined", "direct_calls", "webrtc", "resume_token",
-                     "allowance", "last", "ice_allowance", "ice_last"):
+                     "allowance", "last", "ice_allowance", "ice_last",
+                     "profile", "profile_subscribed", "profile_allowance", "profile_last"):
             setattr(peer, attr, getattr(old, attr))
         peer.resume_attempts = attempts + [now]
         peer.resumed = True
@@ -278,6 +281,17 @@ class GroupLobby(Lobby):
             elif previous != message:
                 peer.emit(message)
                 self.presence_subscribers[peer] = message
+        # Profile thumbnails travel separately, never multiplying the presence frame.
+        profiles = {peer.identity: peer.profile for peer in peers[:32] if peer.profile}
+        for peer in peers:
+            if not peer.profile_subscribed or peer.suspended:
+                continue
+            for identity, profile in profiles.items():
+                if peer.profile_seen.get(identity) != profile["revision"]:
+                    peer.emit(profile)
+            peer.profile_seen = {
+                identity: profile["revision"] for identity, profile in profiles.items()
+            }
 
     @staticmethod
     def parse(raw):
@@ -291,6 +305,9 @@ class GroupLobby(Lobby):
         return value
 
     def admit_control(self, peer, message):
+        if message.get("type") in {"profile", "profile-subscribe"}:
+            # Cosmetic updates must not exhaust audio/admission control budgets.
+            return
         if message.get("type") == "rtc-candidate":
             # Separate burst budget for up to five links. Stale updates consume
             # this too, without exhausting ordinary call-control allowances.
@@ -361,6 +378,27 @@ class GroupLobby(Lobby):
 
     def dispatch(self, peer, message):
         kind = message.get("type")
+        if kind in {"profile", "profile-subscribe"}:
+            now = time.monotonic()
+            peer.profile_allowance = min(
+                4, peer.profile_allowance + (now - peer.profile_last) / 5
+            )
+            peer.profile_last = now
+            if peer.profile_allowance < 1:
+                return
+            peer.profile_allowance -= 1
+            if kind == "profile-subscribe" and set(message) == {"type"}:
+                peer.profile_subscribed = True
+                self.presence_changed()
+                return
+            revision = validate_profile(message, peer.identity)
+            if peer.profile:
+                previous = int(peer.profile["revision"])
+                if revision < previous or (revision == previous and message != peer.profile):
+                    raise ValueError("Profile rollback or conflicting revision")
+            peer.profile = message
+            self.presence_changed()
+            return
         if kind == "recovery-enable" and set(message) == {"type"} and peer.webrtc:
             if peer.resume_token is None:
                 peer.resume_token = encode(secrets.token_bytes(32))

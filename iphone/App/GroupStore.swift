@@ -52,6 +52,12 @@ final class GroupStore: ObservableObject {
     @Published private(set) var notificationID = UUID()
     @Published private(set) var presenceReady = false
     @Published private(set) var presenceSupported = false
+    @Published private(set) var profilesSupported = false
+    @Published private(set) var profiles: [String: DeviceProfile] = [:]
+    private var profilePhoto = Data()
+    private var profileRevision: UInt64 = 0
+    private var profileTask: Task<Void, Never>?
+    private var profileSentAt = Date.distantPast
     @Published private(set) var directCallsSupported = false
     @Published private(set) var presenceTruncated = false
     @Published private(set) var presence: [String: GroupPresence] = [:]
@@ -111,6 +117,39 @@ final class GroupStore: ObservableObject {
     var visibleCandidates: [LobbyCandidate] { candidates.filter { !ignored.contains($0.id) } }
     func trustedName(_ key: String) -> String? { trusted[scope + "|" + key] }
 
+    func updateProfile(photo: Data, revision: UInt64) {
+        guard DeviceProfile.validPhoto(photo), revision > profileRevision else { return }
+        profilePhoto = photo
+        profileRevision = revision
+        publishProfile()
+    }
+
+    private func publishProfile() {
+        guard online, profilesSupported, profileRevision > 0, profileTask == nil,
+              let relay = transport, let signing else { return }
+        let id = generation
+        profileTask = Task {
+            defer { if generation == id { profileTask = nil } }
+            do {
+                while generation == id {
+                    let delay = max(0, 5 - Date().timeIntervalSince(profileSentAt))
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard generation == id else { return }
+                    let profile = try DeviceProfile.create(
+                        photo: profilePhoto, revision: profileRevision, signing: signing)
+                    try await relay.groupSend(profile.message)
+                    guard generation == id else { return }
+                    profileSentAt = Date()
+                    if profile.revision == profileRevision { return }
+                }
+            } catch {
+                if generation == id && !recoverConnection(relay, error: error) {
+                    disconnect("Photo sharing connection lost. Reconnect to retry.")
+                }
+            }
+        }
+    }
+
     var groupDirectory: [GroupPresence] {
         var names: [String: String] = [:]
         let prefix = scope + "|"
@@ -157,6 +196,7 @@ final class GroupStore: ObservableObject {
             if scope != settings.url.absoluteString {
                 knownNames = [:]
                 presence = [:]
+                profiles = [:]
             }
             localIdentity = VoiceProtocol.base64(key.publicKey.rawRepresentation)
             identity = saved
@@ -188,6 +228,8 @@ final class GroupStore: ObservableObject {
                     qualitySupported = webRTCSupported && relay.supportsQuality
                     qualityPathSupported = qualitySupported && relay.supportsQualityPath
                     presenceSupported = relay.supportsPresence
+                    profilesSupported = relay.supportsProfiles
+                    if profilesSupported { try await relay.groupSend(["type": "profile-subscribe"]) }
                     if presenceSupported {
                         try await relay.groupSend(["type": "presence-subscribe"])
                     }
@@ -195,6 +237,7 @@ final class GroupStore: ObservableObject {
                         try await relay.groupSend(["type": "push-capabilities"])
                     }
                     online = true
+                    publishProfile()
                     status = "Online. Start a group call or call a member."
                     startHeartbeat(relay, id: id)
                     if autoStart {
@@ -292,6 +335,7 @@ final class GroupStore: ObservableObject {
         generation = id
         // Mark the old connection recoverable before cancelling any socket wait.
         failed.stop(VoiceError.timeout, recoverable: true)
+        profileTask?.cancel(); profileTask = nil
         task?.cancel()
         heartbeat?.cancel(); heartbeat = nil
         action?.cancel(); action = nil
@@ -356,6 +400,7 @@ final class GroupStore: ObservableObject {
     func disconnect(_ message: String = "Offline. Reconnects automatically on Calls.") {
         generation = UUID()
         transport?.stop(); transport = nil
+        profileTask?.cancel(); profileTask = nil
         task?.cancel(); task = nil
         heartbeat?.cancel(); heartbeat = nil
         action?.cancel(); action = nil
@@ -363,6 +408,7 @@ final class GroupStore: ObservableObject {
         signing = nil; identity = nil
         offers = []; active = false; online = false; sending = false
         presence = [:]; presenceReady = false; presenceSupported = false; presenceTruncated = false
+        profiles = [:]; profilesSupported = false
         autoStart = false
         startTarget = nil; directCallsSupported = false
         webRTCSupported = false; qualitySupported = false; qualityPathSupported = false; iceServers = []
@@ -707,6 +753,12 @@ final class GroupStore: ObservableObject {
 
     private func receive(_ message: [String: String]) throws {
         switch message["type"] {
+        case "profile":
+            // Cosmetic data must never tear down a call or change identity trust.
+            guard profilesSupported, let profile = try? DeviceProfile(message) else { return }
+            if let previous = profiles[profile.identity], previous.revision >= profile.revision { return }
+            guard profiles[profile.identity] != nil || profiles.count < 128 else { return }
+            profiles[profile.identity] = profile
         case "recovery-ready":
             guard recoverySupported, Set(message.keys) == ["type", "token"],
                   let token = message["token"] else { throw VoiceError.packet }

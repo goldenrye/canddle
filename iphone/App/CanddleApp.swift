@@ -215,6 +215,7 @@ struct RelaySettingsView: View {
     var body: some View {
         Group {
             Form {
+                ProfilePhotoSettings(photos: call.profilePhoto, disabled: call.busy || lobby.waiting)
                 Section("Your device") {
                     Text(lobby.pushStatus).font(.caption).foregroundStyle(.secondary)
                     microphoneSettings

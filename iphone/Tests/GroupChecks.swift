@@ -121,6 +121,29 @@ struct GroupChecks {
                 print("PASS group \(input.mode)")
                 return
             }
+            if input.mode.hasPrefix("profiles") {
+                let guest = clients[1]
+                let photo = Data([0xff, 0xd8, 0xff, 0xd9])
+                host.updateProfile(photo: photo, revision: 1)
+                host.connect(settings)
+                guest.connect(settings)
+                try await wait { host.online && guest.online && host.presenceReady && guest.presenceReady }
+                if input.mode == "profiles-old" {
+                    precondition(!host.profilesSupported && !guest.profilesSupported)
+                    precondition(guest.profiles.isEmpty)
+                } else {
+                    try await wait { guest.profiles[host.ownIdentity]?.photo == photo }
+                    precondition(host.trusted.isEmpty && guest.trusted.isEmpty)
+                    let custom = Data([0xff, 0xd8, 1, 2, 0xff, 0xd9])
+                    host.updateProfile(photo: custom, revision: 2)
+                    try await wait(seconds: 8) { guest.profiles[host.ownIdentity]?.photo == custom }
+                    host.updateProfile(photo: Data(), revision: 3)
+                    try await wait(seconds: 8) { guest.profiles[host.ownIdentity]?.photo.isEmpty == true }
+                    precondition(host.online && guest.online && host.trusted.isEmpty && guest.trusted.isEmpty)
+                }
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode == "rename-directory" {
                 try await directoryRenameChecks(clients, settings: settings)
                 print("PASS group \(input.mode)")

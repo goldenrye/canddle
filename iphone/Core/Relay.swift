@@ -156,6 +156,7 @@ private final class PairingResponseDelegate: CertificateDelegate, URLSessionData
 @MainActor
 final class Relay {
     private(set) var supportsPresence = false
+    private(set) var supportsProfiles = false
     private(set) var supportsDirectCalls = false
     private(set) var supportsWebRTC = false
     private(set) var supportsTrickle = false
@@ -250,6 +251,7 @@ final class Relay {
         }
         _ = try VoiceProtocol.decode(nonce, size: 32)
         supportsPresence = group && challenge["presence"] == "1"
+        supportsProfiles = supportsPresence && challenge["profiles"] == "1"
         supportsDirectCalls = group && challenge["direct"] == "1"
         supportsWebRTC = group && challenge["webrtc"] == "1"
         supportsTrickle = supportsWebRTC && challenge["trickle"] == "1"

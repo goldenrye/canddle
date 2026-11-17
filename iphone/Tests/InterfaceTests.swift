@@ -56,6 +56,15 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(button(app, "importCA").exists)
     }
 
+    @MainActor func testProfilePhotoChoicesAreAvailable() {
+        let app = XCUIApplication()
+        app.launch()
+        settings(app)
+        XCTAssertTrue(button(app, "chooseContactPhoto").exists)
+        XCTAssertTrue(button(app, "chooseCustomPhoto").exists)
+        XCTAssertTrue(app.staticTexts["Your photo"].exists)
+    }
+
     @MainActor func testAutoAcceptPreferencePersists() {
         let app = XCUIApplication()
         app.launch()

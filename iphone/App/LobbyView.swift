@@ -130,7 +130,8 @@ struct LobbyView: View {
                         }
                     } label: {
                         HStack(alignment: .top, spacing: 12) {
-                            MemberAvatar(identity: member.id, isYou: member.id == lobby.ownIdentity)
+                            MemberAvatar(identity: member.id, isYou: member.id == lobby.ownIdentity,
+                                         photos: call.profilePhoto, remote: lobby.profiles[member.id]?.photo)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(member.id == lobby.ownIdentity ? "\(member.name) (you)" : member.name)
                                     .font(.body.weight(.semibold))
@@ -163,7 +164,8 @@ struct LobbyView: View {
             }
             ForEach(lobby.groupDirectory) { member in
                 HStack(alignment: .top, spacing: 12) {
-                    MemberAvatar(identity: member.id, isYou: member.id == lobby.localIdentity)
+                    MemberAvatar(identity: member.id, isYou: member.id == lobby.localIdentity,
+                                 photos: call.profilePhoto, remote: lobby.profiles[member.id]?.photo)
                     DisclosureGroup {
                         Text("Device key: \(LobbyProtocol.fingerprint(member.id))")
                             .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -283,6 +285,8 @@ struct LobbyView: View {
 private struct MemberAvatar: View {
     let identity: String
     let isYou: Bool
+    @ObservedObject var photos: ProfilePhotoStore
+    let remote: Data?
 
     private var tint: Color {
         let palette: [Color] = [.teal, .indigo, .blue, .purple, .orange]
@@ -291,12 +295,8 @@ private struct MemberAvatar: View {
     }
 
     var body: some View {
-        Image(systemName: isYou ? "iphone" : "person.fill")
-            .font(.system(size: 19, weight: .medium))
-            .foregroundStyle(tint)
-            .frame(width: 44, height: 44)
-            .background(tint.opacity(0.12), in: Circle())
-            .accessibilityHidden(true)
+        ProfilePhotoCircle(data: isYou ? photos.photo : (remote ?? Data()), tint: tint,
+                           symbol: isYou ? "iphone" : "person.fill")
     }
 }
 

@@ -93,6 +93,7 @@ final class CallStore: ObservableObject {
     @Published private(set) var muted = false
     @Published private(set) var groupAudio = false
     let mediaQuality = CallQualityStore()
+    let profilePhoto = ProfilePhotoStore()
     let localNetwork = LocalNetworkAccess()
     @Published private(set) var verification = ""
     @Published private(set) var rootFingerprint: String?
@@ -116,6 +117,10 @@ final class CallStore: ObservableObject {
         WebRTCAudio.prepare()
         // Ask before the first call: a prompt shown mid-call blocks that call's direct path.
         localNetwork.start()
+        lobby.updateProfile(photo: profilePhoto.photo, revision: profilePhoto.revision)
+        profilePhoto.onChange = { [weak self] photo, revision in
+            self?.lobby.updateProfile(photo: photo, revision: revision)
+        }
         useWebRTCAudio = UserDefaults.standard.object(forKey: "useWebRTCAudio") as? Bool ?? true
         lobby.webRTCAvailable = true
         lobby.preferWebRTC = useWebRTCAudio

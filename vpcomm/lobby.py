@@ -72,6 +72,11 @@ class Peer:
     suspended: bool = False
     resumed: bool = False
     resume_attempts: list[float] = field(default_factory=list)
+    profile: dict | None = None
+    profile_subscribed: bool = False
+    profile_seen: dict = field(default_factory=dict)
+    profile_allowance: float = 4
+    profile_last: float = field(default_factory=time.monotonic)
 
     def emit(self, message):
         if self.suspended:
