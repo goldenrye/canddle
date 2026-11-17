@@ -31,6 +31,19 @@ struct ProtocolChecks {
                                                description: signal, signing: keys[0])
         let verified = try WebRTCCandidate(update.message, session: sessions[1], description: signal)
         precondition(verified.candidate == raw && signal.supportsTrickle && signal.mid == "0")
+        // 10 ms packet request: placed inside the audio section, replaces any
+        // existing ptime, preserves CRLF, and still validates and signs.
+        let short = WebRTCPacketTime.request(sdp.replacingOccurrences(of: "a=rtcp-mux\r\n",
+                                                                       with: "a=rtcp-mux\r\na=ptime:20\r\n"))
+        let shortLines = short.components(separatedBy: "\r\n")
+        precondition(shortLines.filter { $0.hasPrefix("a=ptime:") } == ["a=ptime:10"])
+        precondition(shortLines.firstIndex(of: "a=ptime:10")! == shortLines.firstIndex(of: "a=rtpmap:111 opus/48000/2")! + 1)
+        precondition(!short.replacingOccurrences(of: "\r\n", with: "").contains("\n") && short.hasSuffix("\r\n"))
+        precondition(WebRTCPacketTime.request(short) == short)
+        try WebRTCSignal.validateSDP(short)
+        _ = try WebRTCSignal.create(sdp: short, kind: "answer", to: sessions[0].identity,
+                                    session: sessions[1], signing: keys[1])
+        precondition(WebRTCPacketTime.request("v=0\r\n") == "v=0\r\n")
         for field in update.message.keys {
             var tampered = update.message
             tampered[field] = field == "candidate" ? raw.replacingOccurrences(of: "54321", with: "54322") : "invalid"

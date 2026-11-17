@@ -171,7 +171,8 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         for member in next.roster.members where member.id != next.identity {
             let config = RTCConfiguration()
             WebRTCMediaTuning.configure(config, servers: next.servers, trickle: next.trickle)
-            guard let pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
+            guard let pc = Self.factory.peerConnection(with: config, constraints: WebRTCMediaTuning.connectionConstraints,
+                                                      delegate: self) else {
                 throw VoiceError.packet
             }
             let opus = Self.factory.rtpSenderCapabilities(forKind: "audio").codecs.filter {
@@ -190,7 +191,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                     do {
                         let offer = try await pc.offer(for: constraints)
                         guard current(link) else { return }
-                        try await pc.setLocalDescription(offer)
+                        try await pc.setLocalDescription(WebRTCMediaTuning.shortPackets(offer))
                         if current(link) { localDescriptionSet(link) }
                     } catch { if current(link) { fail("WebRTC offer could not be created.") } }
                 }
@@ -221,7 +222,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                 if signal.kind == "offer" {
                     let answer = try await link.connection.answer(for: constraints)
                     guard current(link) else { return }
-                    try await link.connection.setLocalDescription(answer)
+                    try await link.connection.setLocalDescription(WebRTCMediaTuning.shortPackets(answer))
                     if current(link) { localDescriptionSet(link) }
                 }
             } catch { if current(link) { fail("Authenticated WebRTC negotiation failed.") } }

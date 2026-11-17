@@ -121,6 +121,29 @@ struct WebRTCSetupProgress {
     }
 }
 
+/// Requests 10 ms Opus packets instead of the 20 ms default. The peer encodes
+/// to the `a=ptime` in this side's description, so this roughly halves packet
+/// fill delay for audio we receive. It adds about 25 kbps of header overhead
+/// per stream. An older peer that omits it still receives packets at its own
+/// requested ptime. Applied before setLocalDescription, so it is signed.
+enum WebRTCPacketTime {
+    static let milliseconds = 10
+    static let attribute = "a=ptime:\(milliseconds)"
+
+    static func request(_ sdp: String) -> String {
+        let newline = sdp.contains("\r\n") ? "\r\n" : "\n"
+        var lines = sdp.components(separatedBy: newline)
+        lines.removeAll { $0.hasPrefix("a=ptime:") }
+        guard let audio = lines.firstIndex(where: { $0.hasPrefix("m=audio ") }) else { return sdp }
+        let end = lines[(audio + 1)...].firstIndex(where: { $0.hasPrefix("m=") }) ?? lines.endIndex
+        guard let anchor = lines[audio..<end].lastIndex(where: {
+            $0.hasPrefix("a=rtpmap:") || $0.hasPrefix("a=fmtp:") || $0.hasPrefix("a=rtcp-fb:")
+        }) else { return sdp }
+        lines.insert(attribute, at: anchor + 1)
+        return lines.joined(separator: newline)
+    }
+}
+
 /// Signs the entire SDP, including ICE credentials and DTLS fingerprint, to the
 /// exact admitted pair and fresh roster epoch. No unauthenticated SDP reaches WebRTC.
 struct WebRTCSignal {

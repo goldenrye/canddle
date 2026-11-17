@@ -68,11 +68,24 @@ a relay advertising `trickle=1`; no new server protocol or credentials are neede
 - All network types remain eligible. Surviving backup ICE paths are checked at
   a five-second interval. Ongoing discovery/checks cost some extra battery/data;
   native ICE still prunes inferior paths.
+- Each phone requests **10 ms Opus packets** (`a=ptime:10`, added to its own
+  offer/answer before signing). The other phone encodes to that request, which
+  removes about 10 ms of packet-fill delay per direction. The cost is twice the
+  packet rate and about 25 kbit/s of extra header overhead per stream (roughly
+  55 to 80 kbit/s on the wire at the 32 kbit/s ceiling). An older app does not
+  send the request, so audio sent *to* it stays at 20 ms; it still sends 10 ms
+  packets to an upgraded phone. Older relays pass the attribute unchanged.
 - NetEq fast acceleration helps queued audio catch up. The packet buffer is
-  limited to 30 packets, while adaptive jitter buffering remains active. At
-  20 ms per packet this holds 600 ms of encoded packets, **not** a 600 ms target
-  or a microphone-to-speaker latency guarantee. Severe bursts may drop audio
-  rather than build a longer queue.
+  limited to 60 packets, while adaptive jitter buffering remains active. At
+  10 ms per packet this holds 600 ms of encoded packets (1.2 s from an older
+  app's 20 ms packets), **not** a 600 ms target or a microphone-to-speaker
+  latency guarantee. Severe bursts may drop audio rather than build a longer
+  queue.
+- Audio packets are sent with high network priority and DSCP marking enabled,
+  so they are tagged Expedited Forwarding (EF). Some Wi-Fi access points and
+  routers queue such packets ahead of bulk traffic; many networks, including
+  most cellular and internet paths, ignore or strip the marking. It does not
+  change encryption or routing.
 - The device I/O buffer requests 10 ms. iOS and the active route, especially
   Bluetooth, may use another duration.
 - Audio RTCP reports use a one-second interval. Each sender starts with a
@@ -305,7 +318,9 @@ xcrun swiftc -parse-as-library \
 /tmp/canddle-webrtc-checks --route-upgrade
 ```
 
-`--answerer-sends` checks that the answering phone's SDP is `sendrecv`. Each
+`--answerer-sends` checks that the answering phone's SDP is `sendrecv`. It also
+checks that the SDK accepts and keeps the signed `a=ptime:10` request in the local
+offer and answer, and that the audio sender has high network priority. Each
 phone attaches its microphone with `addTrack` (`App/WebRTCTrack.swift`). A
 transceiver from `addTransceiver` is not reused for a remote offer, so the
 answer used to be `recvonly` and that phone sent no audio. The check creates

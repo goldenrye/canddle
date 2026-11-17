@@ -1,6 +1,16 @@
 import WebRTC
 
 enum WebRTCMediaTuning {
+    /// Enables DSCP marking so `networkPriority = .high` tags audio as
+    /// expedited forwarding (EF). Networks may ignore or strip the marking.
+    static let connectionConstraints = RTCMediaConstraints(
+        mandatoryConstraints: nil, optionalConstraints: ["googDscp": "true"])
+
+    /// Applies the requested Opus packet time to a locally created offer/answer.
+    static func shortPackets(_ description: RTCSessionDescription) -> RTCSessionDescription {
+        RTCSessionDescription(type: description.type, sdp: WebRTCPacketTime.request(description.sdp))
+    }
+
     static func configure(_ config: RTCConfiguration, servers: [CallICEServer], trickle: Bool) {
         config.sdpSemantics = .unifiedPlan
         config.bundlePolicy = .maxBundle
@@ -9,7 +19,7 @@ enum WebRTCMediaTuning {
         config.candidateNetworkPolicy = .all
         config.continualGatheringPolicy = trickle ? .gatherContinually : .gatherOnce
         config.audioJitterBufferFastAccelerate = true
-        config.audioJitterBufferMaxPackets = 30
+        config.audioJitterBufferMaxPackets = 60  // 600 ms of 10 ms packets
         config.iceBackupCandidatePairPingInterval = 5_000
         config.rtcpAudioReportIntervalMs = 1_000
         config.shouldPruneTurnPorts = false
@@ -30,9 +40,13 @@ extension RTCRtpSender {
             encoding.maxBitrateBps = NSNumber(value: bitsPerSecond)
             // Avoid increasing packet batching delay to save bandwidth.
             encoding.adaptiveAudioPacketTime = false
+            // Marks audio packets for low-delay queueing (DSCP EF) where honored.
+            encoding.networkPriority = .high
         }
         parameters = updated
-        return parameters.encodings.allSatisfy { $0.maxBitrateBps?.intValue == bitsPerSecond }
+        return parameters.encodings.allSatisfy {
+            $0.maxBitrateBps?.intValue == bitsPerSecond && $0.networkPriority == .high
+        }
     }
 }
 

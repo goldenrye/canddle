@@ -111,13 +111,22 @@ struct WebRTCChecks {
                 let transceiver = try b.attachAudio(track, codecs: opus)
                 precondition(transceiver.sender.parameters.encodings.allSatisfy {
                     $0.maxBitrateBps?.intValue == 32_000 && !$0.adaptiveAudioPacketTime
+                        && $0.networkPriority == .high
                 })
                 precondition(transceiver.sender.setAudioBitrateCeiling(16_000))
                 precondition(transceiver.sender.setAudioBitrateCeiling(32_000))
             }
-            let offer = try await a.offer(for: constraints)
-            try await b.setRemoteDescription(offer)
-            return (try await b.answer(for: constraints).sdp, b.transceivers.count)
+            // The SDK must accept the 10 ms request and keep it when it
+            // re-serializes the local description (that text is what gets signed).
+            let offer = WebRTCMediaTuning.shortPackets(try await a.offer(for: constraints))
+            try await a.setLocalDescription(offer)
+            let signed = a.localDescription?.sdp ?? ""
+            precondition(signed.contains(WebRTCPacketTime.attribute), "SDK dropped a=ptime from the local offer")
+            try WebRTCSignal.validateSDP(signed)
+            try await b.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: signed))
+            let answer = WebRTCMediaTuning.shortPackets(try await b.answer(for: constraints))
+            precondition(answer.sdp.contains(WebRTCPacketTime.attribute))
+            return (answer.sdp, b.transceivers.count)
         }
         func direction(_ sdp: String) -> String? {
             sdp.components(separatedBy: .newlines).first {
@@ -153,7 +162,7 @@ struct WebRTCChecks {
         let stalledTURN = CommandLine.arguments.contains("--stalled-turn")
             || CommandLine.arguments.contains("--trickle-stalled-turn")
         WebRTCMediaTuning.configure(config, servers: [], trickle: trickle)
-        precondition(config.audioJitterBufferFastAccelerate && config.audioJitterBufferMaxPackets == 30)
+        precondition(config.audioJitterBufferFastAccelerate && config.audioJitterBufferMaxPackets == 60)
         precondition(config.iceBackupCandidatePairPingInterval == 5_000 && config.rtcpAudioReportIntervalMs == 1_000)
         precondition(config.iceTransportPolicy == .all && config.candidateNetworkPolicy == .all)
         precondition(config.continualGatheringPolicy == (trickle ? .gatherContinually : .gatherOnce))
