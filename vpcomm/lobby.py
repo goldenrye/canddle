@@ -68,8 +68,14 @@ class Peer:
     webrtc: bool = False
     ice_allowance: float = 512
     ice_last: float = field(default_factory=time.monotonic)
+    resume_token: str | None = None
+    suspended: bool = False
+    resumed: bool = False
+    resume_attempts: list[float] = field(default_factory=list)
 
     def emit(self, message):
+        if self.suspended:
+            return
         try:
             self.queue.put_nowait(message)
         except asyncio.QueueFull:
@@ -160,39 +166,65 @@ class Lobby:
         peer.emit(message)
         offer.owner.emit(message)
 
+    def register_peer(self, socket, hello, challenge):
+        if set(hello) != {"type", "identity", "name", "signature"}:
+            raise ValueError("Invalid registration")
+        if hello["type"] != "register" or not name_valid(hello["name"]):
+            raise ValueError("Invalid registration")
+        verify(
+            hello["identity"], hello["signature"],
+            transcript("register", challenge, hello["identity"], hello["name"]),
+        )
+        if hello["identity"] in self.peers:
+            raise ValueError("Device already online")
+        peer = Peer(socket, hello["identity"], hello["name"])
+        self.peers[peer.identity] = peer
+        return peer
+
+    def connected_peer(self, peer):
+        for offer in self.offers.values():
+            if self.visible_offer(offer, peer):
+                peer.emit(offer.message)
+
+    def remove_peer(self, peer):
+        if self.peers.get(peer.identity) is not peer:
+            return
+        self.depart(peer)
+        self.peers.pop(peer.identity, None)
+        if peer.offer:
+            self.close_offer(peer.offer)
+        if peer.request:
+            call, request = peer.request
+            offer = self.offers.get(call)
+            if offer and request in offer.requests:
+                self.remove_request(offer, request, "withdrawn")
+        self.presence_changed()
+
+    def disconnected_peer(self, peer, recoverable):
+        self.remove_peer(peer)
+
     async def handle(self, socket):
         peer = None
         writer = None
+        recoverable = False
         try:
             challenge = encode(secrets.token_bytes(32))
             async with asyncio.timeout(10):
                 await socket.send(json.dumps(self.challenge(challenge)))
                 hello = self.parse(await socket.recv())
-            if set(hello) != {"type", "identity", "name", "signature"}:
-                raise ValueError("Invalid registration")
-            if hello["type"] != "register" or not name_valid(hello["name"]):
-                raise ValueError("Invalid registration")
-            verify(
-                hello["identity"],
-                hello["signature"],
-                transcript("register", challenge, hello["identity"], hello["name"]),
-            )
-            if hello["identity"] in self.peers:
-                raise ValueError("Device already online")
-            peer = Peer(socket, hello["identity"], hello["name"])
-            self.peers[peer.identity] = peer
+            peer = self.register_peer(socket, hello, challenge)
             writer = asyncio.create_task(peer.write())
             # A writer failure must also wake a blocked reader.
             writer.add_done_callback(lambda _: socket.transport.abort())
             peer.emit({"type": "online"})
-            for offer in self.offers.values():
-                if self.visible_offer(offer, peer):
-                    peer.emit(offer.message)
+            self.connected_peer(peer)
             self.presence_changed()
             async with asyncio.timeout(self.session_lifetime):
                 while True:
                     async with asyncio.timeout(45):
                         raw = await socket.recv()
+                    if self.peers.get(peer.identity) is not peer:
+                        break
                     if isinstance(raw, bytes):
                         self.media(peer, raw)
                         continue
@@ -203,19 +235,10 @@ class Lobby:
         except (ValueError, TypeError, KeyError, TimeoutError):
             await socket.close(1008, "Invalid lobby request or time limit")
         except ConnectionClosed:
-            pass
+            recoverable = socket.close_code in {1001, 1006}
         finally:
             if peer:
-                self.depart(peer)
-                self.peers.pop(peer.identity, None)
-                if peer.offer:
-                    self.close_offer(peer.offer)
-                if peer.request:
-                    call, request = peer.request
-                    offer = self.offers.get(call)
-                    if offer and request in offer.requests:
-                        self.remove_request(offer, request, "withdrawn")
-                self.presence_changed()
+                self.disconnected_peer(peer, recoverable)
             if writer:
                 writer.cancel()
                 with contextlib.suppress(asyncio.CancelledError, ConnectionClosed, TimeoutError):

@@ -17,6 +17,15 @@ final class GroupStore: ObservableObject {
     private var qualitySupported = false
     private var qualityPathSupported = false
     private var trickleSupported = false
+    private var recoverySupported = false
+    private var resumeToken: String?
+    private var connectionSettings: RelaySettings?
+    @Published private(set) var reconnecting = false
+    private var awaitingResumeState = false
+    private var needsMediaRefresh = false
+    private var recoveryWindow: UUID?
+    private var recoveryDeadline: Task<Void, Never>?
+    var onMediaSuspended: (() -> Void)?
     @Published private(set) var pendingLegacyCall: LegacyCallRequest?
     private var iceServers: [CallICEServer] = []
     private(set) var webRTCSignals: [WebRTCSignal] = []
@@ -89,10 +98,12 @@ final class GroupStore: ObservableObject {
     var isCaller: Bool { ownOffer != nil }
     var isIndividual: Bool { (ownOffer ?? joining?.offer)?.target != nil }
     var usesWebRTC: Bool { (ownOffer ?? joining?.offer)?.usesWebRTC == true }
+    var recoveringMedia: Bool { recoveryWindow != nil }
     var webRTCSession: WebRTCSession? {
-        guard inCall, usesWebRTC, let offer = ownOffer ?? joining?.offer, let roster else { return nil }
+        guard inCall, usesWebRTC, !recoveringMedia,
+              let offer = ownOffer ?? joining?.offer, let roster else { return nil }
         return WebRTCSession(offer: offer, roster: roster, identity: ownIdentity, servers: iceServers,
-                             trickle: trickleSupported)
+                             trickle: trickleSupported, recovery: recoverySupported && resumeToken != nil)
     }
     var memberLimit: Int { isIndividual ? 2 : 6 }
     var approving: String? { proposed?.message["revision"] }
@@ -152,6 +163,7 @@ final class GroupStore: ObservableObject {
             trusted = saved.trusted
             scope = settings.url.absoluteString
             sessionName = name
+            connectionSettings = settings
             autoStart = startCall
             startTarget = target
             let relay = Relay(settings)
@@ -171,6 +183,8 @@ final class GroupStore: ObservableObject {
                     webRTCSupported = relay.supportsWebRTC && webRTCAvailable
                     trickleSupported = webRTCSupported && relay.supportsTrickle
                     if webRTCSupported { try await relay.groupSend(["type": "rtc-enable"]) }
+                    recoverySupported = trickleSupported && relay.supportsRecovery
+                    if recoverySupported { try await relay.groupSend(["type": "recovery-enable"]) }
                     qualitySupported = webRTCSupported && relay.supportsQuality
                     qualityPathSupported = qualitySupported && relay.supportsQualityPath
                     presenceSupported = relay.supportsPresence
@@ -182,47 +196,161 @@ final class GroupStore: ObservableObject {
                     }
                     online = true
                     status = "Online. Start a group call or call a member."
-                    heartbeat = Task {
-                        do {
-                            while !Task.isCancelled {
-                                try await Task.sleep(nanoseconds: 15_000_000_000)
-                                try await relay.groupSend(["type": "ping"])
-                            }
-                        } catch {
-                            if generation == id { disconnect("Group connection lost. Reconnecting on Calls.") }
-                        }
-                    }
+                    startHeartbeat(relay, id: id)
                     if autoStart {
                         autoStart = false
                         announce(target: startTarget)
                         startTarget = nil
                     }
-                    while !Task.isCancelled {
-                        let incoming = try await relay.groupReceive()
-                        guard generation == id else { return }
-                        switch incoming {
-                        case .data(let bytes):
-                            guard var current = cipher else { continue }
-                            let frame = try current.open(bytes)
-                            cipher = current
-                            if let (sender, frame) = frame { try mixer.push(frame, from: sender) }
-                        case .string(let text):
-                            guard text.utf8.count <= WebRTCSignal.maximumSize else { throw VoiceError.packet }
-                            let message = try JSONDecoder().decode([String: String].self, from: Data(text.utf8))
-                            guard message["type"] == "rtc-signal" || text.utf8.count <= 8192 else {
-                                throw VoiceError.packet
-                            }
-                            try receive(message)
-                        @unknown default: throw VoiceError.packet
-                        }
-                    }
+                    try await read(relay, id: id)
                 } catch {
-                    if generation == id {
+                    if generation == id && !recoverConnection(relay, error: error) {
                         disconnect("Group connection or authentication failed. Check the upgraded relay, TLS and network.")
                     }
                 }
             }
         } catch { status = "Could not load the device identity. Unlock the phone and retry." }
+    }
+
+    private func read(_ relay: Relay, id: UUID) async throws {
+        while !Task.isCancelled {
+            let incoming = try await relay.groupReceive(seconds: recoverySupported && inCall ? 15 : 45)
+            guard generation == id else { return }
+            switch incoming {
+            case .data(let bytes):
+                guard var current = cipher else { continue }
+                let frame = try current.open(bytes)
+                cipher = current
+                if let (sender, frame) = frame { try mixer.push(frame, from: sender) }
+            case .string(let text):
+                guard text.utf8.count <= WebRTCSignal.maximumSize else { throw VoiceError.packet }
+                let message = try JSONDecoder().decode([String: String].self, from: Data(text.utf8))
+                guard message["type"] == "rtc-signal" || text.utf8.count <= 8192 else { throw VoiceError.packet }
+                try receive(message)
+            @unknown default: throw VoiceError.packet
+            }
+        }
+    }
+
+    private func startHeartbeat(_ relay: Relay, id: UUID) {
+        heartbeat?.cancel()
+        heartbeat = Task {
+            do {
+                while !Task.isCancelled {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                    guard generation == id else { return }
+                    try await relay.groupSend(["type": "ping"])
+                }
+            } catch {
+                if generation == id && !recoverConnection(relay, error: error) {
+                    disconnect("Group connection lost.")
+                }
+            }
+        }
+    }
+
+    private func beginRecoveryWindow() {
+        guard recoveryWindow == nil else { return }
+        let id = UUID()
+        recoveryWindow = id
+        recoveryDeadline = Task {
+            do { try await Task.sleep(nanoseconds: 30_000_000_000) }
+            catch { return }
+            if recoveryWindow == id { disconnect("Could not recover the call within 30 seconds.") }
+        }
+    }
+
+    private func endRecoveryWindow() {
+        recoveryDeadline?.cancel(); recoveryDeadline = nil
+        recoveryWindow = nil
+        reconnecting = false
+        awaitingResumeState = false
+        needsMediaRefresh = false
+    }
+
+    /// Called by the system path monitor, not by periodic UI refresh.
+    func networkChanged() {
+        guard inCall, usesWebRTC, let transport else { return }
+        if !reconnecting { _ = recoverConnection(transport, error: VoiceError.timeout, networkChange: true) }
+    }
+
+    @discardableResult
+    private func recoverConnection(_ failed: Relay, error: Error, networkChange: Bool = false) -> Bool {
+        guard transport === failed, inCall, usesWebRTC, recoverySupported,
+              let token = resumeToken, let settings = connectionSettings, let signing,
+              let call = (ownOffer ?? joining?.offer)?.id,
+              networkChange || failed.canRecover(error) else { return false }
+        let retry = reconnecting
+        beginRecoveryWindow()
+        reconnecting = true
+        online = false
+        awaitingResumeState = true
+        offers = []
+        status = "Network changed. Reconnecting the current call..."
+        onMediaSuspended?()
+        let id = UUID()
+        generation = id
+        // Mark the old connection recoverable before cancelling any socket wait.
+        failed.stop(VoiceError.timeout, recoverable: true)
+        task?.cancel()
+        heartbeat?.cancel(); heartbeat = nil
+        action?.cancel(); action = nil
+        sending = false
+        let relay = Relay(settings)
+        transport = relay
+        task = Task {
+            do {
+                if retry { try await Task.sleep(nanoseconds: 1_000_000_000) }
+                guard generation == id else { return }
+                try await relay.openLobby(identity: signing, name: sessionName, group: true,
+                                          resume: (call, token))
+                guard generation == id else { return }
+                online = true
+                startHeartbeat(relay, id: id)
+                try await read(relay, id: id)
+            } catch {
+                if generation == id && !recoverConnection(relay, error: error) {
+                    disconnect("The call could not be resumed securely or is no longer available.")
+                }
+            }
+        }
+        return true
+    }
+
+    /// Request a caller-signed fresh epoch instead of accepting unsigned ICE restarts.
+    @discardableResult
+    func recoverMedia() -> Bool {
+        guard inCall, usesWebRTC, recoverySupported, resumeToken != nil,
+              let roster, let relay = transport else { return false }
+        if recoveryWindow != nil { return true }
+        guard online else { return false }
+        beginRecoveryWindow()
+        onMediaSuspended?()
+        status = "Restoring encrypted audio after a network change..."
+        let id = generation
+        Task {
+            do {
+                try await relay.groupSend(["type": "rtc-refresh", "call": roster.message["call"]!,
+                    "revision": String(roster.revision), "epoch": roster.message["epoch"]!])
+            } catch {
+                if generation == id && !recoverConnection(relay, error: error) {
+                    disconnect("Could not request authenticated media recovery.")
+                }
+            }
+        }
+        return true
+    }
+
+    private func processMediaRefresh() {
+        guard needsMediaRefresh, online, !awaitingResumeState, !sending,
+              proposed == nil, departed.isEmpty, let offer = ownOffer, let roster, let signing else { return }
+        do {
+            let next = try GroupRoster.create(offer: offer, revision: roster.revision + 1,
+                                              members: members, signing: signing)
+            needsMediaRefresh = false
+            proposed = next
+            send([next.message])
+        } catch { disconnect("Could not renew the call's authenticated media epoch.") }
     }
 
     func disconnect(_ message: String = "Offline. Reconnects automatically on Calls.") {
@@ -239,6 +367,7 @@ final class GroupStore: ObservableObject {
         startTarget = nil; directCallsSupported = false
         webRTCSupported = false; qualitySupported = false; qualityPathSupported = false; iceServers = []
         trickleSupported = false
+        recoverySupported = false; resumeToken = nil; connectionSettings = nil
         status = message
         pushAvailable = false
         onDisconnected?()
@@ -262,6 +391,7 @@ final class GroupStore: ObservableObject {
         let hadAudio = inCall
         let endedCall = ownOffer?.id ?? joining?.offer.id
         deadline?.cancel(); deadline = nil
+        endRecoveryWindow()
         ownOffer = nil; joining = nil; confirmed = false
         pendingLegacyCall = nil
         members = []; candidates = []; ignored = []; departed = []
@@ -294,9 +424,12 @@ final class GroupStore: ObservableObject {
                 guard generation == id else { return }
                 sending = false; action = nil
                 processDepartures()
+                processMediaRefresh()
                 processAutomaticAdmissions()
             } catch {
-                if generation == id { disconnect("Could not send group action. Reconnecting on Calls.") }
+                if generation == id && !recoverConnection(relay, error: error) {
+                    disconnect("Could not send group action. Reconnecting on Calls.")
+                }
             }
         }
     }
@@ -544,7 +677,8 @@ final class GroupStore: ObservableObject {
         let signal = try WebRTCSignal.create(sdp: sdp, kind: kind, to: to, session: session, signing: signing)
         guard localWebRTCSignals[to] == nil else { throw VoiceError.packet }
         localWebRTCSignals[to] = signal
-        try await transport.groupSend(signal.message)
+        do { try await transport.groupSend(signal.message) }
+        catch { if !recoverConnection(transport, error: error) { throw error } }
     }
 
     func sendWebRTCCandidate(candidate: String, mid: String, to: String, epoch: String) async throws {
@@ -557,7 +691,8 @@ final class GroupStore: ObservableObject {
             session: session, description: description, signing: signing)
         try stream.accept(update)
         outgoingICE[to] = stream
-        try await transport.groupSend(update.message)
+        do { try await transport.groupSend(update.message) }
+        catch { if !recoverConnection(transport, error: error) { throw error } }
     }
 
     /// Best-effort, redacted media statistics for the relay operator. Older relays
@@ -572,6 +707,46 @@ final class GroupStore: ObservableObject {
 
     private func receive(_ message: [String: String]) throws {
         switch message["type"] {
+        case "recovery-ready":
+            guard recoverySupported, Set(message.keys) == ["type", "token"],
+                  let token = message["token"] else { throw VoiceError.packet }
+            _ = try VoiceProtocol.decode(token, size: 32)
+            guard resumeToken == nil || resumeToken == token else { throw VoiceError.peer }
+            resumeToken = token
+        case "resume-state":
+            guard reconnecting, awaitingResumeState, let offer = ownOffer ?? joining?.offer,
+                  let previous = roster else { throw VoiceError.peer }
+            var signed = message
+            signed["type"] = "roster"
+            let next = try GroupRoster(signed, offer: offer)
+            guard next.revision >= previous.revision else { throw VoiceError.order }
+            if ownOffer != nil {
+                guard next.message == previous.message || next.message == proposed?.message else {
+                    throw VoiceError.peer
+                }
+            } else {
+                guard confirmed, let joining,
+                      next.members.first(where: { $0.id == ownIdentity })?.message == joining.request.message else {
+                    throw VoiceError.peer
+                }
+            }
+            // A fresh socket may have missed committed membership events. Accept
+            // only the verified snapshot, then wait for a NEW epoch before audio.
+            roster = next
+            members = next.members
+            proposed = nil
+            candidates = []
+            departed.formIntersection(Set(members.map(\.id)))
+            awaitingResumeState = false
+            resetWebRTCSignals()
+        case "rtc-refresh":
+            guard recoverySupported, let roster, ownOffer?.id == message["call"],
+                  Set(message.keys) == ["type", "call", "revision"],
+                  let revision = message["revision"].flatMap(UInt64.init) else { throw VoiceError.peer }
+            if revision < roster.revision { return }
+            guard revision == roster.revision else { throw VoiceError.order }
+            needsMediaRefresh = true
+            processMediaRefresh()
         case "rtc-config":
             guard webRTCSupported else { throw VoiceError.packet }
             iceServers = try CallICEServer.parse(message)
@@ -691,6 +866,7 @@ final class GroupStore: ObservableObject {
             }.map { trustedName($0.id) ?? $0.name }
             let announceJoin = ownOffer != nil || roster != nil
             roster = next; proposed = nil
+            endRecoveryWindow()
             members = next.members
             departed = departed.intersection(Set(members.map(\.id)))
             mixer.reset(members.filter { $0.id != ownIdentity }.map(\.id))
@@ -735,6 +911,7 @@ final class GroupStore: ObservableObject {
             }
         default: throw VoiceError.packet
         }
+        processMediaRefresh()
         processAutomaticAdmissions()
     }
 }

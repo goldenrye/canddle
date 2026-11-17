@@ -2,10 +2,11 @@
 
 import asyncio
 import json
+import secrets
 import time
 
 from .crypto import decode, encode
-from .lobby import Lobby, offer_fields, transcript, verify
+from .lobby import Lobby, Peer, name_valid, offer_fields, transcript, verify
 from .webrtc import (
     CANDIDATE_FIELDS,
     QUALITY_LOG,
@@ -22,6 +23,7 @@ from .webrtc import (
 
 class GroupLobby(Lobby):
     MAX_MEMBERS = 6
+    RESUME_SECONDS = 40
 
     def __init__(self, push=None, turn=None, **kwargs):
         super().__init__(**kwargs)
@@ -37,6 +39,11 @@ class GroupLobby(Lobby):
         self.request_timers = {}
         self.presence_subscribers = {}
         self.presence_update = None
+        self.resume_timers = {}
+        self.roster_messages = {}
+        self.refresh_pending = {}
+        self.refresh_times = {}
+        self.refresh_timers = {}
 
     def challenge(self, nonce):
         return {
@@ -44,11 +51,158 @@ class GroupLobby(Lobby):
             "presence": "1",
             "direct": "1",
             **(
-                {"webrtc": "1", "quality": "1", "quality_path": "1", "trickle": "1"}
+                {
+                    "webrtc": "1", "quality": "1", "quality_path": "1",
+                    "trickle": "1", "recovery": "1",
+                }
                 if self.turn
                 else {}
             ),
         }
+
+    def recoverable_call(self, peer):
+        call = peer.joined
+        offer = self.offers.get(call)
+        return bool(
+            peer.resume_token and offer and offer.owner.resume_token
+            and offer.message.get("media") == "webrtc" and self.revisions.get(call, 0)
+            and peer.identity in self.members.get(call, {})
+        )
+
+    def register_peer(self, socket, hello, challenge):
+        if hello.get("type") != "resume":
+            return super().register_peer(socket, hello, challenge)
+        if set(hello) != {"type", "identity", "name", "call", "token", "signature"}:
+            raise ValueError("Invalid resume")
+        if not name_valid(hello["name"]):
+            raise ValueError("Invalid resume name")
+        decode(hello["token"], 32)
+        verify(
+            hello["identity"], hello["signature"],
+            transcript("group-resume", challenge, hello["identity"], hello["name"],
+                       hello["call"], hello["token"]),
+        )
+        old = self.peers.get(hello["identity"])
+        if (
+            not old or not self.recoverable_call(old) or old.joined != hello["call"]
+            or old.name != hello["name"]
+            or not secrets.compare_digest(old.resume_token, hello["token"])
+        ):
+            raise ValueError("Resume not authorized or expired")
+        now = time.monotonic()
+        attempts = [stamp for stamp in old.resume_attempts if now - stamp < 60]
+        if len(attempts) >= 8:
+            raise ValueError("Too many resume attempts")
+        if old.identity not in self.resume_timers and len(self.resume_timers) >= 64:
+            raise ValueError("Recovery capacity reached")
+        peer = Peer(socket, old.identity, old.name)
+        for attr in ("offer", "joined", "direct_calls", "webrtc", "resume_token",
+                     "allowance", "last", "ice_allowance", "ice_last"):
+            setattr(peer, attr, getattr(old, attr))
+        peer.resume_attempts = attempts + [now]
+        peer.resumed = True
+        self.peers[peer.identity] = peer
+        if old.offer:
+            self.offers[old.offer].owner = peer
+            for request in list(self.offers[old.offer].requests):
+                self.remove_request(self.offers[old.offer], request, "reconnecting")
+        if old in self.presence_subscribers:
+            self.presence_subscribers.pop(old)
+            self.presence_subscribers[peer] = None
+        self.cancel_resume_timer(peer.identity)
+        self.resume_timers[peer.identity] = asyncio.get_running_loop().call_later(
+            self.RESUME_SECONDS, self.expire_resume, peer
+        )
+        old.suspended = True
+        old.socket.transport.abort()
+        self.paused.add(peer.joined)
+        self.refresh_pending.pop(peer.joined, None)
+        return peer
+
+    def connected_peer(self, peer):
+        if peer.resumed:
+            peer.emit({
+                "type": "rtc-config", "servers": json.dumps(self.turn.servers(peer.identity))
+            })
+            peer.emit({**self.roster_messages[peer.joined], "type": "resume-state"})
+            self.request_refresh(peer.joined)
+        # Clients clear their offer directory before resume, so these are not duplicates.
+        super().connected_peer(peer)
+
+    def cancel_resume_timer(self, identity):
+        timer = self.resume_timers.pop(identity, None)
+        if timer:
+            timer.cancel()
+
+    def disconnected_peer(self, peer, recoverable):
+        if self.peers.get(peer.identity) is not peer:
+            return
+        if recoverable and self.recoverable_call(peer) and (
+            peer.identity in self.resume_timers or len(self.resume_timers) < 64
+        ):
+            peer.suspended = True
+            self.paused.add(peer.joined)
+            self.refresh_pending.pop(peer.joined, None)
+            self.cancel_resume_timer(peer.identity)
+            self.resume_timers[peer.identity] = asyncio.get_running_loop().call_later(
+                self.RESUME_SECONDS, self.expire_resume, peer
+            )
+            # Pending admissions are not replayed across a socket handoff.
+            offer = self.offers[peer.joined]
+            if offer.owner is peer:
+                for request in list(offer.requests):
+                    self.remove_request(offer, request, "reconnecting")
+            self.presence_changed()
+            return
+        self.remove_peer(peer)
+
+    def expire_resume(self, peer):
+        if self.peers.get(peer.identity) is peer:
+            self.remove_peer(peer)
+            peer.socket.transport.abort()
+
+    def remove_peer(self, peer):
+        if self.peers.get(peer.identity) is not peer:
+            return
+        self.cancel_resume_timer(peer.identity)
+        super().remove_peer(peer)
+
+    def shutdown(self):
+        for timer in self.resume_timers.values():
+            timer.cancel()
+        self.resume_timers.clear()
+        for peer in list(self.peers.values()):
+            self.remove_peer(peer)
+        if self.presence_update:
+            self.presence_update.cancel()
+            self.presence_update = None
+        self.presence_subscribers.clear()
+
+    def request_refresh(self, call):
+        timer = self.refresh_timers.pop(call, None)
+        if timer:
+            timer.cancel()
+        offer = self.offers.get(call)
+        revision = self.revisions.get(call)
+        if not offer or not revision or not offer.owner.resume_token:
+            return
+        if self.refresh_pending.get(call) == revision:
+            return
+        if any(self.peers[key].suspended for key in self.members[call]):
+            return
+        now = time.monotonic()
+        times = [stamp for stamp in self.refresh_times.get(call, []) if now - stamp < 60]
+        if times and now - times[-1] < 2:
+            self.refresh_timers[call] = asyncio.get_running_loop().call_later(
+                2 - (now - times[-1]), self.request_refresh, call
+            )
+            return
+        if len(times) >= 8:
+            self.close_offer(call, "recovery-limit")
+            return
+        self.refresh_times[call] = times + [now]
+        self.refresh_pending[call] = revision
+        offer.owner.emit({"type": "rtc-refresh", "call": call, "revision": str(revision)})
 
     def visible_offer(self, offer, peer):
         if offer.message.get("media") == "webrtc" and not peer.webrtc:
@@ -155,14 +309,23 @@ class GroupLobby(Lobby):
         for key in [key for key in self.request_timers if key[0] == call]:
             self.request_timers.pop(key).cancel()
         for identity in self.members.pop(call, {}):
+            self.cancel_resume_timer(identity)
             peer = self.peers.get(identity)
             if peer:
                 peer.joined = None
+                if peer.suspended:
+                    self.peers.pop(identity, None)
         self.revisions.pop(call, None)
         self.epochs.pop(call, None)
         self.rtc_signals.pop(call, None)
         self.rtc_descriptions.pop(call, None)
         self.rtc_candidates.pop(call, None)
+        self.roster_messages.pop(call, None)
+        self.refresh_pending.pop(call, None)
+        self.refresh_times.pop(call, None)
+        timer = self.refresh_timers.pop(call, None)
+        if timer:
+            timer.cancel()
         self.paused.discard(call)
         super().close_offer(call, reason)
         self.presence_changed()
@@ -198,6 +361,24 @@ class GroupLobby(Lobby):
 
     def dispatch(self, peer, message):
         kind = message.get("type")
+        if kind == "recovery-enable" and set(message) == {"type"} and peer.webrtc:
+            if peer.resume_token is None:
+                peer.resume_token = encode(secrets.token_bytes(32))
+                peer.emit({"type": "recovery-ready", "token": peer.resume_token})
+            return
+        if kind == "rtc-refresh" and set(message) == {"type", "call", "revision", "epoch"}:
+            call = message["call"]
+            if not self.recoverable_call(peer) or peer.joined != call:
+                raise ValueError("Not a recoverable call member")
+            if int(message["revision"]) < self.revisions[call]:
+                return
+            if (
+                message["revision"] != str(self.revisions[call])
+                or message["epoch"] != self.epochs[call]
+            ):
+                raise ValueError("Wrong recovery epoch")
+            self.request_refresh(call)
+            return
         if kind == "rtc-enable" and set(message) == {"type"}:
             if not self.turn:
                 raise ValueError("WebRTC unavailable")
@@ -371,11 +552,14 @@ class GroupLobby(Lobby):
             raise ValueError("Invalid caller or admission")
         previous = self.members[call]
         for identity in previous.keys() - members.keys():
+            self.cancel_resume_timer(identity)
             old = self.peers.get(identity)
             if old:
                 old.joined = None
                 # Removed members also verify the caller's signed removal.
                 old.emit(message)
+                if old.suspended:
+                    self.peers.pop(identity, None)
         for request in admitted:
             member, _, _ = offer.requests.pop(request)
             member.request = None
@@ -386,13 +570,18 @@ class GroupLobby(Lobby):
             member = self.peers[identity]
             member.joined = call
             member.emit(message)
+            if not member.suspended:
+                self.cancel_resume_timer(identity)
         self.members[call] = members
         self.revisions[call] = revision
         self.epochs[call] = message["epoch"]
+        self.roster_messages[call] = message
+        self.refresh_pending.pop(call, None)
         self.rtc_signals[call] = set()
         self.rtc_descriptions[call] = {}
         self.rtc_candidates[call] = {}
-        self.paused.discard(call)
+        if not any(self.peers[identity].suspended for identity in members):
+            self.paused.discard(call)
         if revision == 1:
             offer.expiry.cancel()
             offer.expiry = asyncio.get_running_loop().call_later(

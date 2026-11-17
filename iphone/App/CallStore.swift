@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import CryptoKit
 import Foundation
+import Network
 import Security
 import UIKit
 
@@ -99,6 +100,9 @@ final class CallStore: ObservableObject {
     private var relay: Relay?
     private var audio: AudioIO?
     private var rtcAudio: WebRTCAudio?
+    private var networkMonitor: NWPathMonitor?
+    private var networkPath: String?
+    private var networkChange: Task<Void, Never>?
     private var task: Task<Void, Never>?
     private var generation = UUID()
     private var observers: [NSObjectProtocol] = []
@@ -121,6 +125,11 @@ final class CallStore: ObservableObject {
             lobby.rename(name)
         }
         lobby.onAudioReady = { [weak self] in self?.systemCalls.mediaReady() }
+        lobby.onMediaSuspended = { [weak self] in
+            guard let self else { return }
+            self.rtcAudio?.suspend()
+            self.status = "Network changed. Restoring the current call..."
+        }
         lobby.onWebRTCSessionChanged = { [weak self] session in
             guard let self, let audio = self.rtcAudio else { return }
             guard let session else {
@@ -378,7 +387,14 @@ final class CallStore: ObservableObject {
                 guard await AudioIO.permission() else { throw VoiceError.microphone }
                 try Task.checkCancellation()
                 guard generation == id, lobby.inCall else { return }
-                if let session = lobby.webRTCSession {
+                if lobby.usesWebRTC {
+                    // Permission/CallKit activation can overlap a socket handoff.
+                    // Never start stale media or fall through to legacy capture.
+                    while lobby.recoveringMedia {
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                        guard generation == id, lobby.inCall else { return }
+                    }
+                    guard let session = lobby.webRTCSession else { throw VoiceError.ended }
                     try startWebRTC(session, id: id)
                     return
                 }
@@ -448,6 +464,10 @@ final class CallStore: ObservableObject {
             guard self?.generation == id else { return }
             self?.failWebRTC(message)
         }
+        rtc.onRecoveryNeeded = { [weak self] in
+            guard let self, self.generation == id else { return false }
+            return self.lobby.recoverMedia()
+        }
         rtc.onConnected = { [weak self] connected in
             guard let self, self.generation == id else { return }
             if self.connected != connected { self.connected = connected }
@@ -470,6 +490,34 @@ final class CallStore: ObservableObject {
         for signal in lobby.webRTCSignals { rtc.receive(signal) }
         for candidate in lobby.webRTCCandidates { rtc.receive(candidate) }
         observeAudio(id)
+        observeNetwork(id)
+    }
+
+    private func observeNetwork(_ id: UUID) {
+        networkMonitor?.cancel()
+        networkChange?.cancel()
+        networkPath = nil
+        let monitor = NWPathMonitor()
+        networkMonitor = monitor
+        monitor.pathUpdateHandler = { [weak self] path in
+            let interfaces = path.availableInterfaces.filter { path.usesInterfaceType($0.type) }
+                .map(\.name).sorted().joined(separator: ",")
+            let signature = "\(path.status):\(interfaces):\(path.supportsIPv4):\(path.supportsIPv6)"
+            Task { @MainActor in
+                guard let self, self.generation == id else { return }
+                let previous = self.networkPath
+                self.networkPath = signature
+                guard let previous, previous != signature else { return }
+                self.networkChange?.cancel()
+                self.networkChange = Task {
+                    do { try await Task.sleep(nanoseconds: 500_000_000) }
+                    catch { return }
+                    guard self.generation == id else { return }
+                    self.lobby.networkChanged()
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "canddle.call-network"))
     }
 
     func start() {
@@ -611,6 +659,9 @@ final class CallStore: ObservableObject {
         audio = nil
         rtcAudio?.stop()
         rtcAudio = nil
+        networkMonitor?.cancel(); networkMonitor = nil
+        networkChange?.cancel(); networkChange = nil
+        networkPath = nil
         mediaQuality.reset()
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()

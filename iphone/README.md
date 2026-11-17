@@ -82,7 +82,8 @@ If the administrator rotates the shared relay token, pair again.
    talking. Up to **six participants**, including the caller, are supported.
 7. Participants can **Leave call**; the caller can expand a participant's row to
    **Remove participant**, or use **End for everyone** in the bottom bar. The caller must remain connected. If the caller
-   disconnects, the whole call ends. Accepted CallKit calls continue while locked. Another
+   disconnects permanently, the whole call ends. Upgraded WebRTC calls can recover
+   brief Wi-Fi/cellular handoffs without redialing. Accepted CallKit calls continue while locked. Another
    participant leaving does not end the remaining participants' call.
 
 **Settings > Call admission > Auto-accept verified family devices** is off by
@@ -145,7 +146,8 @@ have a one-hour maximum lifetime from going online, so a caller already online
 for a long time has less call time remaining. The app automatically reconnects
 to receive future calls on launch, foreground return, and return from Settings.
 While active, it checks every five seconds and retries disconnected listening
-connections. It never automatically restarts or rejoins a call; there is no host migration.
+connections. Upgraded WebRTC calls can resume still-admitted sessions after a brief
+network change; ended calls are never automatically rejoined, and there is no host migration.
 With APNs configured and the app properly provisioned, PushKit wakes a
 backgrounded/locked iPhone and CallKit presents the incoming call. Without APNs,
 announcements remain foreground-only. See [Background Calls](BACKGROUND_CALLS.md).
@@ -189,7 +191,8 @@ Tap the **phone icon** beside another device in **Group members** to call only
 that device. The receiver sees **Individual call** with **Answer** and **Decline**.
 The selected public device key is signed into the invitation; other group members
 do not receive the offer or push and cannot join. These calls allow exactly two
-devices and end when either leaves or disconnects. They cannot become group calls.
+devices and end when either leaves or permanently disconnects. Upgraded WebRTC
+calls allow bounded network handoff recovery. They cannot become group calls.
 
 Selecting a previously verified device authorizes admission after it explicitly
 answers and confirms the handshake, without another caller Accept tap. This is
@@ -350,13 +353,17 @@ They do not establish listening quality on a physical iPhone.
 This is still not a full real-time media transport: WebSocket/TCP packet loss can
 cause delay. Five seconds without microphone frames or a blocked send ends the
 local call. Manual calls also end after ten seconds without received audio.
-Group signaling has a 45-second receive timeout, kept alive by 15-second heartbeats.
+Group signaling has five-second heartbeats and a 45-second receive timeout,
+shortened to 15 seconds for new reads during recovery-capable WebRTC calls.
 Group media uses 705-byte frames for each directed pair, about 127 MB/hour of
 relay egress per directed link before transport overhead: approximately 3.81 GB/hour
 for six participants (30 directed links), and about 1.41 Mbit/s upload per phone.
 WebRTC calls bypass this PCM transport, mixer and audio engine entirely. They
-remain dependent on a live signaling connection and CallKit activation, and do
-not yet automatically restart ICE after a network change.
+require CallKit activation. With an upgraded relay and caller, a network change
+preserves the call and mute state while signaling resumes and a fresh caller-signed
+epoch rebuilds ICE/DTLS connections. Audio may pause briefly. Recovery is bounded;
+it does not survive a relay restart or prolonged loss. See
+[Wi-Fi/cellular handoff](WEBRTC.md#wi-ficellular-handoff) for limits and device testing.
 
 ## Tests
 

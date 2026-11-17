@@ -214,8 +214,9 @@ class Relay:
             await socket.send('{"type":"push-unregistered"}')
 
 
-def build_server(relay: Relay, host: str, port: int):
-    return serve(
+@contextlib.asynccontextmanager
+async def build_server(relay: Relay, host: str, port: int):
+    async with serve(
         relay.handle,
         host,
         port,
@@ -231,7 +232,11 @@ def build_server(relay: Relay, host: str, port: int):
         server_header=None,
         # Never enable protocol DEBUG logging: it includes frames and credentials.
         logger=LOG,
-    )
+    ) as server:
+        try:
+            yield server
+        finally:
+            relay.group.shutdown()
 
 
 async def run(args):

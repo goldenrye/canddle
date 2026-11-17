@@ -89,8 +89,8 @@ a relay advertising `trickle=1`; no new server protocol or credentials are neede
   between these app-level samples.
 
 No duplicate audio is sent over parallel paths: that can add congestion and
-requires deduplication/handoff support. There is still no automatic ICE restart
-when every path is lost; that failure can require redialing.
+requires deduplication/handoff support. When every path is lost, upgraded clients
+can rebuild authenticated media connections as described below.
 
 For deployment, keep UDP reachable and place TURN close to callers. Multiple
 configured TURN URLs can offer alternative relay routes (all must accept the
@@ -102,6 +102,41 @@ suggests network distance/routing; low RTT with high buffer delay suggests
 jitter/buffering. Neither includes the full audio-device pipeline. Compare
 built-in audio against Bluetooth, enable iOS Local Network access for same-Wi-Fi
 calls, and verify speech on real devices before concluding the delay is fixed.
+
+### Wi-Fi/Cellular Handoff
+
+Upgrade the relay and the iPhone apps, including the caller, to enable recovery
+for already-admitted WebRTC calls. The relay advertises `recovery=1`, and clients
+opt in after enabling WebRTC. No new TURN ports or APNs settings are needed.
+Legacy calls and older relays retain their previous disconnect behavior.
+
+- A call-scoped iOS path monitor detects interface/availability changes, ignores
+  its initial reading and coalesces changes for 500 ms. Socket errors also trigger
+  recovery. Five-second heartbeats and a 15-second receive timeout during eligible
+  calls detect a silent signaling path (an already-pending read can take 45 seconds).
+- The phone keeps its CallKit call and mute state, but suspends audio while
+  reconnecting. It authenticates a new signaling socket using its existing device
+  key, a fresh server challenge, and a random in-memory resume token.
+- The relay retains admitted membership for up to 40 seconds after a recoverable
+  loss. A resume can replace a still-live old socket. Old SDP/candidates are never
+  replayed: the client verifies the last committed signed roster, then the caller
+  signs a new revision/epoch. Every participant rebuilds ICE/DTLS links, preserving
+  membership and refreshing credentials. This can briefly pause the whole group.
+- An established media link disconnected for eight seconds, or reporting failure,
+  also requests a fresh signed epoch. This is a full authenticated mesh rebuild,
+  not an unsigned SDP renegotiation or a native `restartIce()` call.
+- Signaling/epoch recovery has a 30-second client deadline. New media links then
+  have the usual 25-second setup deadline. Repeated resume/refresh requests are
+  bounded to eight per minute; refreshes are at least two seconds apart.
+- Explicit hangup, removal, protocol/authentication failure, relay restart, and
+  prolonged loss remain terminal. Hangup while completely offline stops local
+  retries immediately; remote cleanup may wait for the relay grace period.
+  There is no host migration, automatic readmission, or silent legacy downgrade.
+
+Expect a brief audio gap, not guaranteed seamless speech. Local native integration
+tests cover caller/recipient/simultaneous handoffs, abrupt socket loss, fresh
+signaling budgets, and hangup. They do not simulate cellular radios or prove
+locked-screen CallKit/microphone continuity; test those on signed physical iPhones.
 
 ## Self-Hosted TURN
 
@@ -193,10 +228,11 @@ WebRTC is disabled; partially configured values fail startup.
 - The microphone starts only after admission, permission and CallKit activation.
   WebRTC owns audio capture/playback; the legacy AVAudioEngine pipeline is not
   run alongside it. Mute disables the local WebRTC track.
-- Leaving, call cancellation, signaling loss or audio interruption closes the
-  peer connections. A failed setup ends the call after 25 seconds; a disconnected
-  media link gets 10 seconds to recover. There is no automatic downgrade or ICE
-  restart yet. Wi-Fi/cellular handoff may require redialing.
+- Leaving, call cancellation or audio interruption closes the peer connections.
+  Eligible signaling loss suspends media and preserves the call for bounded
+  authenticated recovery. Failed setup ends the call after 25 seconds; established
+  disconnected media gets eight seconds before requesting a fresh signed epoch.
+  There is no automatic downgrade.
 
 The relay can see signed SDP, including candidates, and TURN can see traffic
 metadata but cannot decrypt audio. Direct peers learn network addresses.
@@ -308,8 +344,12 @@ Before rollout, test on two signed iPhones:
   and admission; verify two-way audio, mute/unmute, speaker and Bluetooth routes.
 - Add/remove group members, including six participants; removed devices must
   lose audio and remaining peers must reconnect.
-- Cancel during negotiation, hang up from either side, lose signaling, change
-  networks, and deny microphone permission. Confirm teardown and no lingering mic.
+- Switch Wi-Fi off/on during a call, on the caller and recipient separately and
+  together, including while locked. Confirm the same CallKit call survives,
+  two-way audio returns, and a muted microphone stays muted after recovery.
+- Cancel during negotiation, hang up from either side (including while offline),
+  block recovery beyond its deadline, and deny microphone permission. Confirm
+  teardown, no automatic readmission, and no lingering microphone.
 - Compare speech under packet loss/jitter with legacy mode and confirm acceptable
   latency and battery use. No WeChat-equivalent quality claim is made.
 - Start relayed, then allow a direct path without redialing. Verify two-way speech

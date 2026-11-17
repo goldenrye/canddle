@@ -161,6 +161,7 @@ final class Relay {
     private(set) var supportsTrickle = false
     private(set) var supportsQuality = false
     private(set) var supportsQualityPath = false
+    private(set) var supportsRecovery = false
     private let session: URLSession
     private let socket: URLSessionWebSocketTask
     private var keys: CallKeys?
@@ -236,7 +237,7 @@ final class Relay {
     }
 
     func openLobby(identity: Curve25519.Signing.PrivateKey, name: String, group: Bool = false,
-                   pushControl: Bool = false) async throws {
+                   pushControl: Bool = false, resume: (call: String, token: String)? = nil) async throws {
         guard LobbyProtocol.nameValid(name), !ended else { throw VoiceError.packet }
         if group { socket.maximumMessageSize = WebRTCSignal.maximumSize }
         socket.resume()
@@ -254,13 +255,24 @@ final class Relay {
         supportsTrickle = supportsWebRTC && challenge["trickle"] == "1"
         supportsQuality = supportsWebRTC && challenge["quality"] == "1"
         supportsQualityPath = supportsQuality && challenge["quality_path"] == "1"
+        supportsRecovery = supportsTrickle && challenge["recovery"] == "1"
         let publicKey = VoiceProtocol.base64(identity.publicKey.rawRepresentation)
-        try await lobbySend([
-            "type": "register", "identity": publicKey, "name": name,
-            "signature": VoiceProtocol.base64(try identity.signature(
-                for: LobbyProtocol.transcript("register", [nonce, publicKey, name])
-            ))
-        ])
+        if let resume {
+            guard supportsRecovery else { throw VoiceError.peer }
+            try await lobbySend([
+                "type": "resume", "identity": publicKey, "name": name,
+                "call": resume.call, "token": resume.token,
+                "signature": VoiceProtocol.base64(try identity.signature(for:
+                    LobbyProtocol.transcript("group-resume", [nonce, publicKey, name, resume.call, resume.token])))
+            ])
+        } else {
+            try await lobbySend([
+                "type": "register", "identity": publicKey, "name": name,
+                "signature": VoiceProtocol.base64(try identity.signature(
+                    for: LobbyProtocol.transcript("register", [nonce, publicKey, name])
+                ))
+            ])
+        }
         guard try await lobbyReceive(seconds: 10) == ["type": "online"] else {
             throw VoiceError.packet
         }
@@ -290,8 +302,8 @@ final class Relay {
         try await send(.data(data))
     }
 
-    func groupReceive() async throws -> URLSessionWebSocketTask.Message {
-        try await receive(seconds: 45)
+    func groupReceive(seconds: Double = 45) async throws -> URLSessionWebSocketTask.Message {
+        try await receive(seconds: seconds)
     }
 
     func connect(_ invitation: CallInvitation, waiting: () -> Void) async throws -> String {
@@ -374,7 +386,7 @@ final class Relay {
                 // reliably produce an immediate URLSession completion callback.
                 let timer = Task { @MainActor in
                     try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    self.stop(VoiceError.timeout)
+                    self.stop(VoiceError.timeout, recoverable: true)
                 }
                 pending[id] = {
                     timer.cancel()
@@ -393,7 +405,26 @@ final class Relay {
         }
     }
 
-    func stop(_ error: Error = VoiceError.ended) {
+    func canRecover(_ error: Error) -> Bool {
+        guard [.invalid, .goingAway, .abnormalClosure].contains(socket.closeCode) else { return false }
+        if let error = error as? VoiceError, error == .timeout { return true }
+        let error = error as NSError
+        // URLSession also reports abrupt socket loss as ENOTCONN/ECONNRESET,
+        // not always as NSURLErrorNetworkConnectionLost.
+        if error.domain == NSPOSIXErrorDomain {
+            let recoverable: [POSIXErrorCode] = [
+                .ENOTCONN, .ECONNRESET, .ECONNABORTED, .ENETDOWN, .ENETUNREACH,
+                .EHOSTUNREACH, .ETIMEDOUT, .EPIPE, .ECONNREFUSED
+            ]
+            return recoverable.contains { Int($0.rawValue) == error.code }
+        }
+        return error.domain == NSURLErrorDomain && [
+            NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet,
+            NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed
+        ].contains(error.code)
+    }
+
+    func stop(_ error: Error = VoiceError.ended, recoverable: Bool = false) {
         guard !ended else { return }
         ended = true
         ready = false
@@ -401,7 +432,7 @@ final class Relay {
         let waiters = Array(pending.values)
         pending.removeAll()
         waiters.forEach { $0(error) }
-        socket.cancel(with: .goingAway, reason: nil)
+        socket.cancel(with: recoverable ? .goingAway : .normalClosure, reason: nil)
         session.invalidateAndCancel()
     }
 }

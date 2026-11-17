@@ -44,6 +44,7 @@ struct WebRTCSession {
     let identity: String
     let servers: [CallICEServer]
     var trickle = false
+    var recovery = false
 }
 
 enum WebRTCSetupStage: String {

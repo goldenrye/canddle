@@ -207,8 +207,8 @@ then closes with the same end marker. There is no new message type, unsigned
 candidate path, or relaxation of receiver limits. Candidate removals are not
 separately signaled; the bound limits retained remote history. Native ICE can
 select newly authenticated working routes without changing the DTLS identity
-or creating duplicate media sessions. There is no automatic ICE restart or
-unbounded stream reset.
+or creating duplicate media sessions. There is no unsigned ICE restart or
+unbounded stream reset; network recovery requires a fresh caller-signed epoch.
 
 On each authenticated roster change, every old peer connection is closed and
 new ICE credentials/certificates are created, including between remaining
@@ -218,11 +218,38 @@ signatures do not provide availability or instantaneous global revocation.
 Clients close media on signaling loss, cancellation, removal or audio shutdown.
 Microphone startup also requires iOS permission and CallKit activation.
 
+Upgraded WebRTC clients opt into relay `recovery=1` with `recovery-enable`.
+The relay issues a random 32-byte in-memory token. Resume registration signs
+`challenge`, `identity`, `name`, `call`, `token`, in that order under purpose
+`group-resume`. A fresh challenge and the same registered identity/name/token
+are required; possession of the relay bearer credential or resume token alone
+cannot impersonate a device. Tokens are not persisted, logged, or sent to peers.
+Only still-admitted WebRTC members whose caller also opted in may resume.
+
+Abnormal/going-away socket loss retains membership for 40 seconds; normal close,
+protocol violations, removal, and expiry do not. At most 64 recovery timers exist,
+with eight successful resumes per identity/minute. A valid resume atomically
+replaces the previous socket and returns the committed caller-signed roster as
+`resume-state`. Clients verify its signature, reject rollback, and require their
+original signed admission. The caller accepts only its prior roster or exact
+outstanding proposal. This snapshot alone cannot restart audio.
+
+The relay asks the caller for `rtc-refresh`; an admitted member may also request
+it for the current call/revision/epoch. The caller signs a fresh roster revision
+with unchanged membership. Existing signed roster authorization and fresh
+ICE/DTLS credentials are required; no uncertain SDP/candidate messages are replayed.
+Refresh requests are coalesced, spaced by two seconds, and capped at eight/minute.
+All timers/history are cleared on teardown. The client bounds signaling/epoch
+recovery to 30 seconds; subsequent media setup has a 25-second deadline.
+Explicit offline hangup stops retries, though remote cleanup can await expiry.
+Recovery preserves CallKit/mute state, not ongoing media while membership is
+unknown. It is not host migration, readmission, or post-compromise recovery.
+
 The relay sees SDP/candidates; direct peers learn each other's network addresses.
 TURN sees addressing/timing/volume but cannot decrypt DTLS-SRTP audio. TURN/TCP
 may be selected if UDP is blocked. Group media remains a bounded six-device mesh,
-not an SFU or server-mixed call. Network handoff/ICE restart and real-device audio
-quality still require further validation. Native WebRTC M157 is a pinned
+not an SFU or server-mixed call. Physical network handoff and real-device audio
+quality still require validation. Native WebRTC M157 is a pinned
 community binary; neither its integration nor the custom identity protocol has
 received an independent audit. See [WebRTC deployment](iphone/WEBRTC.md).
 
@@ -445,8 +472,9 @@ budget. Group text frames are capped at 8192 bytes; media at 705. Each sender ha
 a 600-frame burst and 300 frames/second refill (up to five 50-fps destinations).
 Control messages retain the 12-message burst / 2-per-second refill. Queues hold
 64 outbound messages; blocked peers are disconnected, not silently dropped within
-an epoch. Sends time out at three seconds. Fifteen-second heartbeats and
-45-second inactivity deadlines remain. These bounds do not prevent DDoS.
+an epoch. Sends time out at three seconds. Group clients send five-second
+heartbeats; the relay retains its 45-second inactivity deadline. Eligible WebRTC
+clients use 15-second receive deadlines during calls. These bounds do not prevent DDoS.
 
 Optional APNs VoIP delivery and CallKit provide background/lock-screen ringing.
 Apple receives signed public offer metadata, relay URL, recipient public key and
@@ -458,7 +486,8 @@ Configured iPhones automatically open
 the authenticated group connection while active on Calls, retrying disconnected
 listeners every five seconds. Settings pauses automatic attempts; backgrounding
 disconnects idle sockets. Accepted CallKit audio continues while locked.
-Reconnection never restores call membership or starts the microphone.
+Idle reconnection never restores ended membership or starts the microphone.
+Only the bounded WebRTC resume flow above preserves a still-admitted active call.
 Keychain credentials, public CA trust, identity and verified peers are now
 device-only, accessible after first unlock, to support push-launched call answering.
 CallKit answer does not bypass first-time identity verification or caller admission
@@ -488,8 +517,9 @@ caller and selected recipient, with their original offer/request entries.
 An honest relay sends the offer and closure only to these two capable clients,
 including an offline recipient that later connects and opts in. APNs delivery is
 filtered to the selected identity. The selected recipient can decline before
-joining. Decline, withdrawal, rejection, expiry or either party disconnecting ends
-the individual call. Audio uses the existing pairwise encrypted transport.
+joining. Decline, withdrawal, rejection, expiry or either party permanently
+disconnecting ends the individual call. Eligible WebRTC calls allow bounded network
+handoff recovery; legacy audio uses the existing pairwise encrypted transport.
 
 Explicitly selecting an already verified device authorizes its automatic admission
 after a signed request and valid confirmation, independently of the group

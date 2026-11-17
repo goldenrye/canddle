@@ -11,10 +11,14 @@ struct GroupChecks {
         let root: String?
     }
 
-    @MainActor static func wait(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(6))
+    @MainActor static func wait(seconds: Double = 6, line: UInt = #line,
+                                _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
         while !condition() {
-            guard ContinuousClock.now < deadline else { throw VoiceError.timeout }
+            guard ContinuousClock.now < deadline else {
+                print("Timed out at GroupChecks.swift:\(line)")
+                throw VoiceError.timeout
+            }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
     }
@@ -24,6 +28,12 @@ struct GroupChecks {
     }
 
     @MainActor static func audio(_ clients: [GroupStore]) async throws {
+        // A caller's roster acknowledgment can precede delivery to the other
+        // sockets, especially over TLS. Sending an old epoch is correctly dropped.
+        let expected = Set(clients.map(\.ownIdentity))
+        try await wait {
+            clients.allSatisfy { $0.inCall && Set($0.members.map(\.id)) == expected }
+        }
         for (index, client) in clients.enumerated() {
             try await client.transmit(pcm(UInt16(100 * (index + 1))))
         }
@@ -572,7 +582,7 @@ struct GroupChecks {
             return
         }
         try await wait { host.webRTCSupported && receiver.webRTCSupported }
-        host.announce(target: mode == "rtc-direct" ? receiver.ownIdentity : nil)
+        host.announce(target: mode.contains("direct") ? receiver.ownIdentity : nil)
         try await wait { receiver.offers.count == 1 && !host.sending }
         let offer = receiver.offers[0]
         precondition(offer.usesWebRTC && legacy.offers.isEmpty && host.pendingLegacyCall == nil)
@@ -586,7 +596,7 @@ struct GroupChecks {
         try rejects { _ = try LobbyOffer(stripped) }
         var changes = 0
         host.onWebRTCSessionChanged = { if $0 != nil { changes += 1 } }
-        let count = mode == "rtc-direct" ? 2 : 6
+        let count = mode.contains("direct") ? 2 : 6
         for index in 1..<count {
             let client = clients[index]
             if index > 1 { client.connect(settings) }
@@ -651,6 +661,85 @@ struct GroupChecks {
             precondition(client.usesWebRTC && client.mixedFrame() == VoiceProtocol.silence)
         }
         precondition(legacy.offers.isEmpty)
+        if mode.hasPrefix("rtc-handoff") {
+            var ended = 0
+            var suspended = 0
+            for client in clients.prefix(count) {
+                precondition(client.webRTCSession!.recovery)
+                client.onAudioEnded = { _ in ended += 1 }
+                client.onMediaSuspended = { suspended += 1 }
+            }
+            if mode.hasSuffix("timeout") || mode.hasSuffix("untrusted") {
+                let started = ContinuousClock.now
+                host.networkChanged()
+                precondition(host.reconnecting && host.inCall)
+                precondition(host.webRTCSession == nil)
+                do { try await wait(seconds: 35) { !host.active } }
+                catch {
+                    print("Recovery deadline: active=\(host.active), inCall=\(host.inCall), "
+                          + "recovering=\(host.recoveringMedia), status=\(host.status)")
+                    throw error
+                }
+                precondition(!host.inCall && !host.reconnecting && ended >= 1)
+                if mode.hasSuffix("timeout") {
+                    precondition(started.duration(to: .now) >= .seconds(29))
+                    precondition(host.status.contains("30 seconds"))
+                } else {
+                    precondition(host.status.contains("securely"))
+                }
+                return
+            }
+            if mode.hasSuffix("hangup") {
+                if !mode.contains("online") {
+                    receiver.networkChanged()
+                    precondition(receiver.reconnecting && receiver.inCall)
+                    precondition(receiver.webRTCSession == nil)
+                }
+                receiver.disconnect()
+                try await wait { !host.inCall }
+                try await Task.sleep(nanoseconds: 200_000_000)
+                precondition(!receiver.active && !receiver.reconnecting && ended == 2)
+                return
+            }
+            for stage in 0..<4 {
+                let previous = host.webRTCSession!.roster
+                if stage == 0 && mode != "rtc-handoff-abort" { host.networkChanged() }
+                if stage == 1 { receiver.networkChanged() }
+                if stage == 2 {
+                    host.networkChanged()
+                    receiver.networkChanged()
+                }
+                if stage == 3 { precondition(receiver.recoverMedia()) }
+                try await wait {
+                    clients.prefix(count).allSatisfy {
+                        $0.online && !$0.reconnecting && $0.inCall
+                            && ($0.webRTCSession?.roster.revision ?? 0) > previous.revision
+                    }
+                }
+                let fresh = host.webRTCSession!
+                precondition(fresh.roster.message["epoch"] != previous.message["epoch"])
+                precondition(fresh.roster.members.map(\.message) == previous.members.map(\.message))
+                precondition(ended == 0)
+                // The old SDP/candidate budget must not leak into the fresh epoch.
+                for from in clients.prefix(count) {
+                    for to in clients.prefix(count) where from !== to {
+                        try await from.sendWebRTC(sdp: sdp + WebRTCSignal.trickleAttribute + "\r\n",
+                            kind: from.ownIdentity < to.ownIdentity ? "offer" : "answer",
+                            to: to.ownIdentity, epoch: fresh.roster.message["epoch"]!)
+                    }
+                }
+                try await wait { clients.prefix(count).allSatisfy { $0.webRTCSignals.count == count - 1 } }
+                try await receiver.sendWebRTCCandidate(candidate: "", mid: "0",
+                    to: host.ownIdentity, epoch: fresh.roster.message["epoch"]!)
+                try await wait { host.webRTCCandidates.count == 1 }
+            }
+            precondition(suspended >= 5 && ended == 0)
+        }
+        if mode == "rtc-no-recovery" {
+            precondition(!session.recovery)
+            host.networkChanged()
+            precondition(!host.reconnecting && host.inCall && !host.recoverMedia())
+        }
         if mode == "rtc-group" {
             host.remove(host.members.first { $0.id == receiver.ownIdentity }!)
             try await wait { !receiver.inCall && host.members.count == count - 1 }
