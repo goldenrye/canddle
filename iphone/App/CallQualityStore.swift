@@ -4,6 +4,27 @@ import Foundation
 /// Observed only by media badges/details, never by the whole call screen.
 @MainActor
 final class CallQualityStore: ObservableObject {
+    enum MediaPath: String {
+        case direct = "Direct", turn = "TURN", relay = "Relay", unknown = "Path ?"
+
+        var symbol: String {
+            switch self {
+            case .direct: return "arrow.left.arrow.right"
+            case .turn, .relay: return "server.rack"
+            case .unknown: return "questionmark.circle"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .direct: return "Direct between this iPhone and this participant, without TURN"
+            case .turn: return "Through TURN for this participant"
+            case .relay: return "Through the legacy audio relay, not TURN"
+            case .unknown: return "The current audio path is not yet known"
+            }
+        }
+    }
+
     struct Snapshot: Equatable {
         var webRTC = false
         var peers: Set<String> = []
@@ -67,6 +88,19 @@ final class CallQualityStore: ObservableObject {
         return CallQualityIndicator.summary(snapshot.peers.sorted().map {
             indicator(peer: $0, legacyConnected: legacyConnected)
         })
+    }
+
+    func path(peer: String, legacyConnected: Bool) -> MediaPath {
+        guard snapshot.webRTC else { return legacyConnected ? .relay : .unknown }
+        guard snapshot.connected.contains(peer), !snapshot.stale.contains(peer),
+              let reading = snapshot.readings[peer],
+              reading.indicator(at: Date()).quality != .stale else { return .unknown }
+        // Use the selected pair at BOTH ends, not UDP/TCP or merely available candidates.
+        switch reading.link.relayed {
+        case false?: return .direct
+        case true?: return .turn
+        case nil: return .unknown
+        }
     }
 
     func expire(at now: Date) {

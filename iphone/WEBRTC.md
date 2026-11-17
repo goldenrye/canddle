@@ -382,6 +382,12 @@ mixed group, plus a labeled quality icon. Each remote participant has its own
 indicator; expand the participant to see round-trip delay, jitter, inbound and
 outbound packet loss, concealed audio, and jitter-buffer delay.
 
+- Each remote participant also has a small path badge beside UDP/TCP:
+  two-way arrows with **Direct**, a server icon with **TURN**, or **Path ?**
+  when unknown. It describes this iPhone's pair with that participant, not
+  connections between two other participants. A selected relay candidate at
+  either end means TURN, even when transport is UDP. Legacy calls show **Relay**,
+  not TURN. The badge follows the same sampling/staleness rules as the metrics.
 - Transport comes from the selected audio candidate, not the signaling
   WebSocket. It describes the local leg from this iPhone; for TURN, this is
   the phone-to-TURN connection. TURN/TLS is displayed as TCP. The other
@@ -451,7 +457,8 @@ ICE checks direct and relayed paths and normally prefers working direct paths,
 but a relay may connect first or remain preferred by native selection rules.
 A route with `relay` at either end goes through TURN; known `host`, `srflx` or
 `prflx` candidates at both ends indicate a direct path. Unknown candidates do
-not prove either. The call details screen shows this as **Path**.
+not prove either. Each participant row shows a **Direct**/**TURN** path badge;
+expanded details also describe the path.
 
 - **Same Wi-Fi:** phones connect over their local addresses (`host>host`), but
   only with iOS **Local Network** access. Without it, iOS silently drops those

@@ -317,6 +317,7 @@ struct CallMediaIndicator: View {
 
     var body: some View {
         let indicator = quality.indicator(peer: peer, legacyConnected: connected)
+        let path = peer.map { quality.path(peer: $0, legacyConnected: connected) }
         VStack(alignment: .leading, spacing: 6) {
             if details {
                 Text(quality.snapshot.webRTC
@@ -331,11 +332,19 @@ struct CallMediaIndicator: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label(indicator.transport, systemImage: "arrow.up.arrow.down")
+                    HStack(spacing: 10) {
+                        Label(indicator.transport, systemImage: "arrow.up.arrow.down")
+                        if let path {
+                            Label(path.rawValue, systemImage: path.symbol)
+                                .help(path.description)
+                                .accessibilityIdentifier("mediaPath-\(peer ?? "")")
+                        }
+                    }
                     qualityBadge(indicator)
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Audio transport: \(indicator.transport.replacingOccurrences(of: "?", with: "Unknown")). Connection quality: \(indicator.qualityLabel).")
+                .accessibilityLabel((path.map { "Audio path: \($0.description). " } ?? "")
+                    + "Audio transport: \(indicator.transport.replacingOccurrences(of: "?", with: "Unknown")). Connection quality: \(indicator.qualityLabel).")
                 .accessibilityIdentifier(peer.map { "mediaQuality-\($0)" } ?? "callMediaQuality")
             }
         }
