@@ -120,7 +120,9 @@ Global pairing rate limiting is not DDoS protection.
 - Server TLS certificates are validated with hostname verification. `--ca`
   chooses a private trust root; there is no insecure/skip-validation option.
 - Client proxy auto-discovery is disabled. WebRTC uses only the operator-configured
-  TURN service and peer ICE addresses, not hardcoded public STUN/TURN services.
+  TURN services (also their plain UDP listeners for STUN binding) and peer ICE
+  addresses, not hardcoded public STUN/TURN services. TLS/TCP-only listeners
+  are not probed using plaintext UDP.
 - WebSocket compression is disabled. The transport receive ceiling is 32768 bytes
   for WebRTC SDP messages; other group frames remain limited to 8192 bytes.
   Manual room frames and legacy lobby frames remain limited
@@ -197,6 +199,16 @@ per-connection bucket (512 burst, 64 updates/second refill), including for stale
 updates. Stale candidates and candidates during a membership pause are discarded.
 All candidate sequences, queues and description bindings are reset on a new
 signed roster or call teardown. Candidates and their addresses are not logged.
+
+On trickle-capable relays, continual gathering may discover new interface
+addresses during a call. The signed outgoing stream stays open until the local
+64-candidate discovery budget (including initial SDP candidates) is exhausted,
+then closes with the same end marker. There is no new message type, unsigned
+candidate path, or relaxation of receiver limits. Candidate removals are not
+separately signaled; the bound limits retained remote history. Native ICE can
+select newly authenticated working routes without changing the DTLS identity
+or creating duplicate media sessions. There is no automatic ICE restart or
+unbounded stream reset.
 
 On each authenticated roster change, every old peer connection is closed and
 new ICE credentials/certificates are created, including between remaining

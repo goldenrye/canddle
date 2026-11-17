@@ -3,6 +3,84 @@ import Darwin
 import Foundation
 import WebRTC
 
+/// A test-only forwarding path, delaying opaque UDP datagrams 80 ms each way.
+private final class DelayedAudioPath: @unchecked Sendable {
+    let port: UInt16
+    private let socketFD: Int32
+    private let queue = DispatchQueue(label: "canddle.test.delayed-path")
+    private let source: DispatchSourceRead
+    private var running = true
+    private let endpoints: [sockaddr_in]
+
+    init(addresses: [(String, UInt16)]) throws {
+        func endpoint(_ host: String, _ port: UInt16) -> sockaddr_in {
+            var value = sockaddr_in()
+            value.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            value.sin_family = sa_family_t(AF_INET)
+            value.sin_addr.s_addr = inet_addr(host)
+            value.sin_port = port.bigEndian
+            return value
+        }
+        endpoints = addresses.map { endpoint($0.0, $0.1) }
+        socketFD = socket(AF_INET, SOCK_DGRAM, 0)
+        guard socketFD >= 0 else { throw VoiceError.packet }
+        let fd = socketFD
+        var address = endpoint(addresses[0].0, 0)
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0 else { Darwin.close(fd); throw VoiceError.packet }
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &size) }
+        }
+        guard named == 0, fcntl(fd, F_SETFL, O_NONBLOCK) == 0 else {
+            Darwin.close(fd)
+            throw VoiceError.packet
+        }
+        port = UInt16(bigEndian: address.sin_port)
+        source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        source.setCancelHandler { Darwin.close(fd) }
+        source.setEventHandler { [weak self] in self?.read() }
+        source.resume()
+    }
+
+    func stop() { queue.sync { running = false; source.cancel() } }
+
+    private func read() {
+        while running {
+            var data = [UInt8](repeating: 0, count: 65_536)
+            var from = sockaddr_in()
+            var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let count = withUnsafeMutablePointer(to: &from) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    recvfrom(socketFD, &data, data.count, 0, $0, &size)
+                }
+            }
+            guard count > 0 else { return }
+            guard let index = endpoints.firstIndex(where: {
+                $0.sin_addr.s_addr == from.sin_addr.s_addr && $0.sin_port == from.sin_port
+            }) else { continue }
+            let payload = Data(data.prefix(count))
+            let destination = endpoints[1 - index]
+            queue.asyncAfter(deadline: .now() + .milliseconds(80)) { [weak self] in
+                guard let self, self.running else { return }
+                var target = destination
+                _ = payload.withUnsafeBytes { bytes in
+                    withUnsafePointer(to: &target) {
+                        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                            sendto(self.socketFD, bytes.baseAddress, bytes.count, 0, $0,
+                                   socklen_t(MemoryLayout<sockaddr_in>.size))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Real ICE/DTLS negotiation without microphone tracks or device permissions.
 @main
 struct WebRTCChecks {
@@ -30,7 +108,12 @@ struct WebRTCChecks {
                 // The pre-fix app path.
                 try b.addTransceiver(with: track)!.setCodecPreferences(opus, error: ())
             } else {
-                _ = try b.attachAudio(track, codecs: opus)
+                let transceiver = try b.attachAudio(track, codecs: opus)
+                precondition(transceiver.sender.parameters.encodings.allSatisfy {
+                    $0.maxBitrateBps?.intValue == 32_000 && !$0.adaptiveAudioPacketTime
+                })
+                precondition(transceiver.sender.setAudioBitrateCeiling(16_000))
+                precondition(transceiver.sender.setAudioBitrateCeiling(32_000))
             }
             let offer = try await a.offer(for: constraints)
             try await b.setRemoteDescription(offer)
@@ -57,14 +140,23 @@ struct WebRTCChecks {
         let factory = RTCPeerConnectionFactory(encoderFactory: nil, decoderFactory: nil)
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let config = RTCConfiguration()
-        config.sdpSemantics = .unifiedPlan
-        config.rtcpMuxPolicy = .require
-        config.continualGatheringPolicy = .gatherOnce
-        config.iceServers = []
+        let discovery = RTCConfiguration()
+        WebRTCMediaTuning.configure(discovery, servers: [CallICEServer(
+            urls: ["turn:turn.example:3478?transport=udp", "turn:turn.example:3478?transport=tcp"],
+            username: "test", credential: "test")], trickle: true)
+        precondition(discovery.iceServers.count == 2)
+        precondition(discovery.iceServers.last?.urlStrings == ["stun:turn.example:3478"])
+        precondition(discovery.continualGatheringPolicy == .gatherContinually)
+        let upgrade = CommandLine.arguments.contains("--route-upgrade")
         let trickle = CommandLine.arguments.contains("--trickle")
-            || CommandLine.arguments.contains("--trickle-stalled-turn")
+            || CommandLine.arguments.contains("--trickle-stalled-turn") || upgrade
         let stalledTURN = CommandLine.arguments.contains("--stalled-turn")
             || CommandLine.arguments.contains("--trickle-stalled-turn")
+        WebRTCMediaTuning.configure(config, servers: [], trickle: trickle)
+        precondition(config.audioJitterBufferFastAccelerate && config.audioJitterBufferMaxPackets == 30)
+        precondition(config.iceBackupCandidatePairPingInterval == 5_000 && config.rtcpAudioReportIntervalMs == 1_000)
+        precondition(config.iceTransportPolicy == .all && config.candidateNetworkPolicy == .all)
+        precondition(config.continualGatheringPolicy == (trickle ? .gatherContinually : .gatherOnce))
         if CommandLine.arguments.contains("--answerer-sends") {
             try await answererSends(factory: factory, config: config, constraints: constraints)
             return
@@ -160,6 +252,11 @@ struct WebRTCChecks {
             to: sessions[0].identity, session: sessions[1], signing: keys[1])
         let verifiedAnswer = try WebRTCSignal(signedAnswer.message, session: sessions[0])
         try await a.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: verifiedAnswer.sdp))
+        if upgrade {
+            try await upgradeRoute(connections: [a, b], descriptions: [signedOffer, signedAnswer],
+                                   sessions: sessions, keys: keys)
+            return
+        }
         if trickle {
             precondition(!verifiedOffer.sdp.contains("a=candidate:") && !verifiedAnswer.sdp.contains("a=candidate:"))
             // Deliberately deliver UDP candidates later than the former four-second
@@ -199,5 +296,69 @@ struct WebRTCChecks {
             print("PASS trickle: delayed signed UDP candidates connect ICE/DTLS after five seconds; silent TURN=\(stalledTURN)")
         }
         print("PASS WebRTC: signed audio SDP, ICE and DTLS connected; no microphone capture")
+    }
+
+    @MainActor static func upgradeRoute(connections: [RTCPeerConnection], descriptions: [WebRTCSignal],
+                                       sessions: [WebRTCSession], keys: [Curve25519.Signing.PrivateKey]) async throws {
+        func direct(_ connection: RTCPeerConnection) -> String? {
+            connection.localDescription?.sdp.components(separatedBy: .newlines).first {
+                let fields = $0.split(separator: " ")
+                return fields.count >= 8 && $0.hasPrefix("a=candidate:") && fields[2] == "udp"
+                    && fields[7] == "host" && !fields[4].contains(":")
+            }.map { String($0.dropFirst(2)) }
+        }
+        try await wait { connections.allSatisfy { direct($0) != nil } }
+        let candidates = connections.map { direct($0)! }
+        let addresses = candidates.map { candidate -> (String, UInt16) in
+            let fields = candidate.split(separator: " ")
+            return (String(fields[4]), UInt16(fields[5])!)
+        }
+        precondition(addresses[0].0 == addresses[1].0)
+        let path = try DelayedAudioPath(addresses: addresses)
+        defer { path.stop() }
+        var streams = [WebRTCCandidateStream(), WebRTCCandidateStream()]
+        func deliver(_ raw: String, index: Int) async throws {
+            let description = descriptions[index]
+            let signed = try WebRTCCandidate.create(candidate: raw, mid: description.mid!,
+                sequence: streams[index].sequence + 1, session: sessions[index],
+                description: description, signing: keys[index])
+            let verified = try WebRTCCandidate(signed.message, session: sessions[1 - index],
+                                               description: description)
+            try streams[index].accept(verified)
+            try await connections[1 - index].add(RTCIceCandidate(
+                sdp: verified.candidate, sdpMLineIndex: 0, sdpMid: verified.mid))
+        }
+        for index in 0..<2 {
+            try await deliver("candidate:forward\(index) 1 udp 1 \(addresses[0].0) \(path.port) typ relay",
+                              index: index)
+        }
+        try await wait { connections.allSatisfy { $0.connectionState == .connected } }
+        func selected(_ connection: RTCPeerConnection) async -> (port: Int, rtt: Double) {
+            let stats = await connection.statistics().statistics
+            let pairID = stats.values.first { $0.type == "transport" }!.values["selectedCandidatePairId"] as! String
+            let pair = stats[pairID]!
+            let remoteID = pair.values["remoteCandidateId"] as! String
+            return ((stats[remoteID]!.values["port"] as! NSNumber).intValue,
+                    (pair.values["currentRoundTripTime"] as! NSNumber).doubleValue)
+        }
+        let before = await selected(connections[0])
+        precondition(before.port == Int(path.port) && before.rtt >= 0.1)
+        for index in 0..<2 { try await deliver(candidates[index], index: index) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        var after = before
+        while ContinuousClock.now < deadline {
+            precondition(connections.allSatisfy { $0.connectionState == .connected })
+            after = await selected(connections[0])
+            let other = await selected(connections[1])
+            if after.port != Int(path.port), other.port != Int(path.port),
+               after.rtt < before.rtt / 2 { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let otherAfter = await selected(connections[1])
+        precondition(after.port != Int(path.port) && otherAfter.port != Int(path.port)
+                     && after.rtt < before.rtt / 2,
+                     "ICE must upgrade from the delayed forwarding path to direct UDP")
+        print("PASS route-upgrade: signed direct UDP replaces forwarding path while connected; "
+              + "RTT \(Int(before.rtt * 1000)) -> \(Int(after.rtt * 1000)) ms; no microphone")
     }
 }

@@ -9,6 +9,9 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     private final class Link {
         let peer: String
         let connection: RTCPeerConnection
+        let sender: RTCRtpSender
+        let continualGathering: Bool
+        var bitratePolicy = WebRTCAudioBitratePolicy()
         var negotiation: Task<Void, Never>?
         var publishing: Task<Void, Never>?
         var deadline: Task<Void, Never>?
@@ -30,9 +33,11 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         var candidateApplying: Task<Void, Never>?
         var quality: WebRTCQualitySample?
         var qualityGeneration = UUID()
-        init(peer: String, connection: RTCPeerConnection) {
+        init(peer: String, connection: RTCPeerConnection, sender: RTCRtpSender, continualGathering: Bool) {
             self.peer = peer
             self.connection = connection
+            self.sender = sender
+            self.continualGathering = continualGathering
         }
     }
 
@@ -62,6 +67,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         audio.isAudioEnabled = false
         let configuration = RTCAudioSessionConfiguration.webRTC()
         configuration.categoryOptions = [.defaultToSpeaker, .allowBluetoothHFP]
+        configuration.ioBufferDuration = 0.01
         RTCAudioSessionConfiguration.setWebRTC(configuration)
     }
 
@@ -129,6 +135,12 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                   generation == link.qualityGeneration else { continue }
             if let previous = link.quality,
                let report = WebRTCQualityLink(peer: link.peer, from: previous, to: next, muted: muted) {
+                var policy = link.bitratePolicy
+                if previous.selectedPair != next.selectedPair { policy.resetObservations() }
+                let ceiling = policy.observe(report)
+                if ceiling == link.bitratePolicy.ceiling || link.sender.setAudioBitrateCeiling(ceiling) {
+                    link.bitratePolicy = policy
+                }
                 reports.append((link, generation, report))
             }
             link.quality = next
@@ -154,13 +166,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         onConnected?(false)
         for member in next.roster.members where member.id != next.identity {
             let config = RTCConfiguration()
-            config.sdpSemantics = .unifiedPlan
-            config.bundlePolicy = .maxBundle
-            config.rtcpMuxPolicy = .require
-            config.continualGatheringPolicy = .gatherOnce
-            config.iceServers = next.servers.map {
-                RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
-            }
+            WebRTCMediaTuning.configure(config, servers: next.servers, trickle: next.trickle)
             guard let pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
                 throw VoiceError.packet
             }
@@ -168,9 +174,11 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                 $0.name.lowercased() == "opus"
             }
             // addTrack (inside attachAudio) lets the answerer reuse this sender.
-            do { _ = try pc.attachAudio(track, codecs: opus) }
+            let transceiver: RTCRtpTransceiver
+            do { transceiver = try pc.attachAudio(track, codecs: opus) }
             catch { pc.close(); throw error }
-            let link = Link(peer: member.id, connection: pc)
+            let link = Link(peer: member.id, connection: pc, sender: transceiver.sender,
+                            continualGathering: next.trickle)
             links[member.id] = link
             setDeadline(link, seconds: 25)
             if next.identity < member.id {
@@ -315,13 +323,18 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                 // end marker cannot overtake candidates queued onto the actor.
                 var finishedGathering = false
                 while current(link) {
-                    finishedGathering = link.connection.iceGatheringState == .complete
-                    if finishedGathering {
+                    let complete = link.connection.iceGatheringState == .complete
+                    if complete {
                         for line in (link.connection.localDescription?.sdp ?? "").components(separatedBy: .newlines)
                             where line.hasPrefix("a=candidate:") {
                             rememberCandidate(String(line.dropFirst(2)), link: link)
                         }
                     }
+                    // Later interface candidates remain eligible after connection,
+                    // but cannot exceed the existing authenticated stream budget.
+                    finishedGathering = WebRTCCandidateStream.shouldEnd(
+                        continual: link.continualGathering, gatheringComplete: complete,
+                        discovered: link.seenCandidates.count)
                     guard !link.localCandidates.isEmpty else { break }
                     let candidate = link.localCandidates.removeFirst()
                     guard link.sentCandidates.insert(candidate).inserted else { continue }
@@ -376,6 +389,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         if state != .connected {
             link.quality = nil
             link.qualityGeneration = UUID()
+            link.bitratePolicy.resetObservations()
         }
         switch state {
         case .connected:

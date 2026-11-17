@@ -138,6 +138,7 @@ struct ProtocolChecks {
         }
         let first = WebRTCQualitySample(stats(1), seconds: 100)
         let second = WebRTCQualitySample(stats(2), seconds: 110)
+        precondition(first.selectedPair == "p")
         precondition(first.route == "relay/tcp>srflx/udp" && first.roundTrip == 0.25)
         precondition(WebRTCQualitySample(stats(1, transport: "10.0.0.1"), seconds: 0).route == "relay>srflx/udp")
         guard let link = WebRTCQualityLink(peer: "peer", from: first, to: second, muted: false) else {
@@ -170,7 +171,8 @@ struct ProtocolChecks {
         precondition(!links.contains("2001:db8") && !links.contains("\"lan\""))
         var lan = link
         lan.lan = 0
-        precondition(try WebRTCQualityLink.message(call: "call", links: [lan])["links"]!.contains("\"lan\":0"))
+        let lanMessage = try WebRTCQualityLink.message(call: "call", links: [lan])
+        precondition(lanMessage["links"]!.contains("\"lan\":0"))
         let legacy = try WebRTCQualityLink.message(call: "call", links: [lan.withoutPath()])["links"]!
         for key in ["l_host", "r_srflx", "d_ok", "d_fail", "\"v6\"", "\"lan\""] {
             precondition(!legacy.contains(key), "old relays reject \(key)")
@@ -178,6 +180,68 @@ struct ProtocolChecks {
         precondition(legacy.contains("\"rtt_ms\":250"))
         try rejects { _ = try WebRTCQualityLink.message(call: "call", links: []) }
         qualityIndicatorChecks(link)
+        latencyPolicyChecks(link)
+    }
+
+    static func latencyPolicyChecks(_ report: WebRTCQualityLink) {
+        for complete in [false, true] {
+            precondition(!WebRTCCandidateStream.shouldEnd(continual: true, gatheringComplete: complete, discovered: 63))
+            precondition(WebRTCCandidateStream.shouldEnd(continual: true, gatheringComplete: complete, discovered: 64))
+        }
+        precondition(WebRTCCandidateStream.shouldEnd(continual: false, gatheringComplete: true, discovered: 1))
+        precondition(!WebRTCCandidateStream.shouldEnd(continual: false, gatheringComplete: false, discovered: 1))
+        let turn = CallICEServer(urls: [
+            "turn:voice.example:3478?transport=udp", "turn:voice.example:3478",
+            "turn:voice.example:3478?transport=tcp", "turns:voice.example:5349?transport=tcp",
+            "turn:[2001:db8::1]:3478?transport=udp"
+        ], username: "test", credential: "test")
+        precondition(turn.stunURLs == ["stun:[2001:db8::1]:3478", "stun:voice.example:3478"])
+        precondition(CallICEServer(urls: ["turn:voice.example:80?transport=tcp", "turns:voice.example:443"],
+                                   username: "test", credential: "test").stunURLs.isEmpty)
+        var link = report
+        link.txPps = 50
+        link.muted = false
+        link.lossOut = 0
+        link.rttMs = 100
+        link.lossIn = 50
+        link.jitterMs = 300
+        var policy = WebRTCAudioBitratePolicy()
+        for _ in 0..<4 { precondition(policy.observe(link) == 32_000) }
+        link.lossOut = 8
+        for expected in [32_000, 24_000, 24_000, 16_000, 16_000, 16_000] {
+            precondition(policy.observe(link) == expected)
+        }
+        link.lossOut = 0
+        for expected in [16_000, 16_000, 24_000, 24_000, 24_000, 32_000] {
+            precondition(policy.observe(link) == expected)
+        }
+        link.rttMs = 220
+        precondition(policy.observe(link) == 32_000)
+        precondition(policy.observe(link) == 24_000)
+        // The caller resets evidence on an actual selected-pair change, even
+        // when both paths share the same redacted route label.
+        policy.resetObservations()
+        for _ in 0..<3 { _ = policy.observe(link) }
+        precondition(policy.ceiling == 32_000)
+        link.route = "host/udp>host/udp"
+        link.rttMs = 400
+        for _ in 0..<3 { precondition(policy.observe(link) == 32_000) }
+        link.lossOut = nil
+        link.rttMs = nil
+        for _ in 0..<6 { precondition(policy.observe(link) == 32_000) }
+        link.lossOut = 50
+        link.muted = true
+        for _ in 0..<4 { precondition(policy.observe(link) == 32_000) }
+        link.muted = false
+        link.txPps = 0
+        for _ in 0..<4 { precondition(policy.observe(link) == 32_000) }
+        link.txPps = 50
+        precondition(policy.observe(link) == 32_000)
+        policy.resetObservations()
+        precondition(policy.observe(link) == 32_000)
+        link.lossOut = .nan
+        link.rttMs = .infinity
+        precondition(policy.observe(link) == 32_000)
     }
 
     static func qualityIndicatorChecks(_ report: WebRTCQualityLink) {

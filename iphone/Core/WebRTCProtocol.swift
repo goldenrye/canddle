@@ -6,6 +6,14 @@ struct CallICEServer: Codable {
     let username: String
     let credential: String
 
+    /// Reuse only configured plain UDP TURN listeners for STUN binding.
+    var stunURLs: [String] {
+        Array(Set(urls.compactMap { url -> String? in
+            guard url.hasPrefix("turn:"), !url.hasSuffix("?transport=tcp") else { return nil }
+            return "stun:" + url.dropFirst(5).components(separatedBy: "?")[0]
+        })).sorted()
+    }
+
     static func parse(_ message: [String: String]) throws -> [CallICEServer] {
         guard Set(message.keys) == ["type", "servers"], message["type"] == "rtc-config",
               let raw = message["servers"], raw.utf8.count <= 4096 else { throw VoiceError.packet }
@@ -253,6 +261,10 @@ struct WebRTCCandidateStream {
     private(set) var sequence = 0
     private(set) var ended = false
 
+    static func shouldEnd(continual: Bool, gatheringComplete: Bool, discovered: Int) -> Bool {
+        discovered >= WebRTCCandidate.limit || (!continual && gatheringComplete)
+    }
+
     mutating func accept(_ update: WebRTCCandidate) throws {
         guard !ended, update.sequence == sequence + 1 else { throw VoiceError.packet }
         sequence = update.sequence
@@ -332,6 +344,9 @@ struct WebRTCQualitySample: Sendable, Equatable {
     var remoteLoss: Double?
     var route = "unknown"
     var path = WebRTCPathSummary()
+    // Opaque local stats ID, never transmitted. Reset tuning when the actual
+    // selected pair changes, even if its redacted route label stays the same.
+    var selectedPair: String?
 
     static let candidateTypes: Set<String> = ["host", "srflx", "prflx", "relay"]
     static let transports: Set<String> = ["udp", "tcp", "tls"]
@@ -369,6 +384,7 @@ struct WebRTCQualitySample: Sendable, Equatable {
         }
         let pairs = stats.values.filter { $0.type == "candidate-pair" }
         let selectedID = stats.values.first { $0.type == "transport" }?.strings["selectedCandidatePairId"]
+        selectedPair = selectedID
         let pair = selectedID.flatMap { stats[$0] }
             ?? pairs.first { $0.numbers["nominated"] == 1 && $0.strings["state"] == "succeeded" }
         path = WebRTCPathSummary(stats, selected: pair)
@@ -491,6 +507,52 @@ struct WebRTCQualityLink: Codable, Equatable {
         let text = String(decoding: try encoder.encode(links), as: UTF8.self)
         guard text.utf8.count <= 4096 else { throw VoiceError.packet }
         return ["type": "rtc-quality", "call": call, "links": text]
+    }
+}
+
+/// A ceiling on native congestion control, not a forced encoder bitrate.
+/// Incoming loss/jitter must not throttle the unrelated outgoing stream.
+struct WebRTCAudioBitratePolicy {
+    private(set) var ceiling = 32_000
+    private var baselineRTT: Double?
+    private var route: String?
+    private var badIntervals = 0
+    private var goodIntervals = 0
+
+    mutating func resetObservations() {
+        baselineRTT = nil
+        route = nil
+        badIntervals = 0
+        goodIntervals = 0
+    }
+
+    mutating func observe(_ link: WebRTCQualityLink) -> Int {
+        guard !link.muted, link.txPps > 0, link.secs >= 1, link.secs <= 30 else {
+            resetObservations()
+            return ceiling
+        }
+        if route != link.route {
+            resetObservations()
+            route = link.route
+        }
+        let rtt = link.rttMs.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        let loss = link.lossOut.flatMap { $0.isFinite && (0...100).contains($0) ? $0 : nil }
+        if let rtt { baselineRTT = min(baselineRTT ?? rtt, rtt) }
+        let queued = rtt.flatMap { value in baselineRTT.map { value - $0 >= 100 } } ?? false
+        let bad = (loss.map { $0 >= 5 } ?? false) || queued
+        let healthy = loss.map { $0 <= 1 } == true
+            && rtt.flatMap { value in baselineRTT.map { value <= $0 + 50 } } == true
+        badIntervals = bad ? badIntervals + 1 : 0
+        goodIntervals = healthy ? goodIntervals + 1 : 0
+        if badIntervals >= 2 {
+            ceiling = ceiling > 24_000 ? 24_000 : 16_000
+            badIntervals = 0
+            goodIntervals = 0
+        } else if goodIntervals >= 3 {
+            ceiling = ceiling < 24_000 ? 24_000 : 32_000
+            goodIntervals = 0
+        }
+        return ceiling
     }
 }
 

@@ -42,9 +42,66 @@ Once negotiated, new candidates continue to be delivered, including UDP candidat
 discovered after that initial cutoff. Updates arriving before the remote
 description is applied are queued until the native SDK is ready.
 
-This makes late routes eligible for ICE connectivity checks; it does not force
-UDP, guarantee a switch from a working TCP route, or implement ICE restart.
-Keep TURN/TCP fallback available. Check `route=` quality logs on real networks.
+On trickle-capable relays, native gathering now continues as interfaces change,
+including after connection. The signed candidate stream stays open for later
+routes. Native ICE can move the existing connection onto a preferred working
+direct path without creating a second media session. Selection considers
+writability, network cost, priority and RTT, not just RTT.
+
+Discovery retains at most 64 distinct candidates per link/roster epoch,
+including candidates already in initial SDP. At that limit, queued updates drain
+and the signed end marker closes the stream. Existing audio continues, but
+further candidates are ignored until a new epoch/call. Candidate removals are
+not separately signaled; the bound also limits retained remote history.
+Older relays use gather-once behavior. Peers without signed trickle support
+still receive only the initial SDP.
+
+This does not force UDP, guarantee a direct route or a switch from TURN/TCP,
+or implement ICE restart. Keep fallback available. Update both iPhones and use
+a relay advertising `trickle=1`; no new server protocol or credentials are needed.
+
+### Lower-Delay Audio
+
+- STUN binding discovery also uses the **same configured plain UDP TURN
+  listeners**, helping find direct NAT paths. No third-party server is added.
+  TLS/TCP-only listeners are not probed with plaintext UDP.
+- All network types remain eligible. Surviving backup ICE paths are checked at
+  a five-second interval. Ongoing discovery/checks cost some extra battery/data;
+  native ICE still prunes inferior paths.
+- NetEq fast acceleration helps queued audio catch up. The packet buffer is
+  limited to 30 packets, while adaptive jitter buffering remains active. At
+  20 ms per packet this holds 600 ms of encoded packets, **not** a 600 ms target
+  or a microphone-to-speaker latency guarantee. Severe bursts may drop audio
+  rather than build a longer queue.
+- The device I/O buffer requests 10 ms. iOS and the active route, especially
+  Bluetooth, may use another duration.
+- Audio RTCP reports use a one-second interval. Each sender starts with a
+  32 kbit/s ceiling; native congestion control and Opus loss protection remain
+  active. Adaptive packet batching is disabled so the app does not increase
+  packet duration to save bandwidth.
+- At the ten-second stats cadence, two consecutive outbound-loss readings of
+  at least 5%, or an RTT increase of at least 100 ms above the observed route
+  baseline, lower that ceiling from 32 to 24 to 16 kbit/s. Three healthy readings
+  raise it one step. Healthy means outbound loss at most 1% and RTT within 50 ms
+  of baseline. Missing data is not recovery. Mute/no transmission and selected
+  pair changes reset the evidence; incoming loss/jitter alone does not throttle
+  the outgoing stream. Native congestion control can adapt below the ceiling
+  between these app-level samples.
+
+No duplicate audio is sent over parallel paths: that can add congestion and
+requires deduplication/handoff support. There is still no automatic ICE restart
+when every path is lost; that failure can require redialing.
+
+For deployment, keep UDP reachable and place TURN close to callers. Multiple
+configured TURN URLs can offer alternative relay routes (all must accept the
+configured REST secret); this is not automatic geographic routing. Symmetric
+NAT/firewalls can still require TURN. Preserve TCP fallback.
+
+Compare `rtt_ms` and `jb_ms` on **both** phones. High RTT with low buffer delay
+suggests network distance/routing; low RTT with high buffer delay suggests
+jitter/buffering. Neither includes the full audio-device pipeline. Compare
+built-in audio against Bluetooth, enable iOS Local Network access for same-Wi-Fi
+calls, and verify speech on real devices before concluding the delay is fixed.
 
 ## Self-Hosted TURN
 
@@ -209,6 +266,7 @@ xcrun swiftc -parse-as-library \
   -o /tmp/canddle-webrtc-checks
 /tmp/canddle-webrtc-checks
 /tmp/canddle-webrtc-checks --answerer-sends
+/tmp/canddle-webrtc-checks --route-upgrade
 ```
 
 `--answerer-sends` checks that the answering phone's SDP is `sendrecv`. Each
@@ -216,6 +274,14 @@ phone attaches its microphone with `addTrack` (`App/WebRTCTrack.swift`). A
 transceiver from `addTransceiver` is not reused for a remote offer, so the
 answer used to be `recvonly` and that phone sent no audio. The check creates
 SDP only and never opens a microphone.
+
+`--route-upgrade` establishes ICE/DTLS through a test-only local UDP forwarder
+that adds 80 ms in each direction, then delivers signed direct candidates.
+It verifies that both peers leave the forwarding path, sampled connection state
+remains connected, and selected RTT falls by at least half. It uses the production
+ICE configuration, without microphone capture or ICE restart. This tests native
+route switching, not real coturn allocation, cellular handoff, TCP-to-UDP recovery,
+or end-to-end speech latency.
 
 This probe uses receive-only transceivers: it does not record or play sound.
 Successful negotiation does not establish physical audio quality.
@@ -246,6 +312,11 @@ Before rollout, test on two signed iPhones:
   networks, and deny microphone permission. Confirm teardown and no lingering mic.
 - Compare speech under packet loss/jitter with legacy mode and confirm acceptable
   latency and battery use. No WeChat-equivalent quality claim is made.
+- Start relayed, then allow a direct path without redialing. Verify two-way speech
+  continuity, real TURN/TCP-to-UDP recovery, repeated Wi-Fi/cellular changes,
+  candidate-budget exhaustion, and cases where no direct route is reachable.
+- Inject jitter/loss and check whether faster catch-up and reduced buffering
+  cause unacceptable choppiness. Verify bitrate ceilings recover gradually.
 
 ## Call Quality Diagnostics
 
@@ -321,9 +392,11 @@ the call; reports are not persisted on the phone.
 
 ## Direct Paths
 
-ICE always tries direct paths first and uses TURN only when every direct
-check fails. A route with `relay` at either end goes through TURN; anything
-else is direct. The call details screen shows this as **Path**.
+ICE checks direct and relayed paths and normally prefers working direct paths,
+but a relay may connect first or remain preferred by native selection rules.
+A route with `relay` at either end goes through TURN; known `host`, `srflx` or
+`prflx` candidates at both ends indicate a direct path. Unknown candidates do
+not prove either. The call details screen shows this as **Path**.
 
 - **Same Wi-Fi:** phones connect over their local addresses (`host>host`), but
   only with iOS **Local Network** access. Without it, iOS silently drops those
@@ -354,8 +427,9 @@ Reading them for a relayed call:
 
 - `lan=0`: Local Network access is off on that phone. Turn it on in Settings.
 - `r_host` or `l_host` is 0: no local addresses were exchanged at all.
-- `l_srflx=0`: the phone found no public address, so TURN UDP was unreachable
-  and hole punching was impossible.
+- `l_srflx=0`: no server-reflexive candidate is present in the report. Check
+  UDP/STUN access; this alone does not prove direct connectivity is impossible,
+  since local, IPv6 or peer-reflexive paths may still work.
 - `d_fail` > 0 and `d_ok=0`: direct paths were tried and blocked, by a router,
   firewall or Wi-Fi isolation.
 - `l_v6=0` or `r_v6=0`: at least one phone has no IPv6, so there is no IPv6 path.
