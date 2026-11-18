@@ -122,8 +122,19 @@ struct CallView: View {
                                 Label(call.muted ? "Unmute" : "Mute",
                                       systemImage: call.muted ? "mic.slash.fill" : "mic.fill")
                             }.accessibilityIdentifier("mute")
+                            Button(action: call.toggleSpeaker) {
+                                Label("Speaker", systemImage: call.speakerEnabled
+                                      ? "speaker.wave.2.fill" : "speaker.fill")
+                            }
+                            .tint(call.speakerEnabled ? .teal : .secondary)
+                            .accessibilityIdentifier("speaker")
+                            .accessibilityValue(call.speakerEnabled ? "On" : "Off")
+                            .accessibilityHint(call.speakerEnabled
+                                ? "Switch to the earpiece or connected headset"
+                                : "Switch to the loudspeaker")
+                        } else {
+                            Spacer()
                         }
-                        Spacer()
                         Button(role: .destructive) {
                             if call.busy { call.hangUp() }
                             else { lobby.cancelRequest() }
@@ -135,6 +146,7 @@ struct CallView: View {
                         }.accessibilityIdentifier("hangUp")
                             .disabled(!call.busy && (lobby.sending || lobby.approving != nil))
                     }
+                    .labelStyle(CallControlLabelStyle())
                     .buttonStyle(.bordered).controlSize(.large)
                     .padding().background(.regularMaterial)
                 }
@@ -164,6 +176,15 @@ struct CallView: View {
                 Text(call.callFailure ?? "")
             }
         }
+    }
+}
+
+private struct CallControlLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(spacing: 5) {
+            configuration.icon.font(.system(size: 20))
+            configuration.title.font(.caption).multilineTextAlignment(.center)
+        }.frame(maxWidth: .infinity)
     }
 }
 

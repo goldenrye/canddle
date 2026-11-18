@@ -73,6 +73,27 @@ On a signed iPhone, verify selecting a contact with/without a photo, cancelling
 both pickers, choosing an iCloud photo, restoring the contact default, persistence
 after relaunch, and updating/removing the avatar on a second phone.
 
+### Dialing and Speaker
+
+Outgoing individual/group calls play a local ringback tone after CallKit activates
+audio, until the first participant is admitted. The tone means the call request
+is pending, not that the remote phone has definitely received a push or is ringing.
+It stops on admission, cancellation, decline, expiry, disconnection, or CallKit
+reset. Ringback does not start microphone capture or transmit audio.
+CallKit is marked connected only when media connects, not when dialing begins.
+
+New calls default to the iPhone earpiece, or an attached headset selected by iOS.
+Tap **Speaker** beside Mute to turn the loudspeaker on/off. The button reflects
+the actual output, including route changes from the system call screen. Turning
+Speaker off restores normal receiver/headset routing; it does not mute the other
+person. Speaker override is cleared at teardown and is not saved for the next call.
+Devices without an earpiece may continue to use their built-in speaker.
+
+The native `CallAudioChecks.swift` probe verifies ringback activation/admission/
+teardown transitions and decodes the generated tone without playing it.
+Physical iPhone testing is still needed for CallKit activation, audible ringback,
+earpiece volume, and the loudspeaker/Bluetooth route switches.
+
 ### Pair Without Typing a Token
 
 1. Ask your server administrator to enable pairing and run
@@ -485,6 +506,11 @@ relying on this client, run iPhone-to-desktop and iPhone-to-iPhone calls and che
 
 - Both audio directions, echo, volume, latency, and a ten-minute call.
 - Built-in audio, wired headphones, and Bluetooth HFP.
+- Outgoing ringback before acceptance, including cancel/decline/timeout and lock
+  screen. Answer quickly to check activation/admission ordering; no tone should
+  leak into the conversation or continue after hangup.
+- New-call earpiece default, repeated Speaker on/off, and route changes in the
+  system call screen. Confirm the following call does not inherit Speaker on.
 - Permission denial, later permission grant, mute, and hang-up.
 - Backgrounding, screen lock, headphone removal, and incoming phone calls.
 - Wi-Fi/cellular interruption, relay restart, and token rotation.

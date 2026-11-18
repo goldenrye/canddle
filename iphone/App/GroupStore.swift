@@ -64,6 +64,7 @@ final class GroupStore: ObservableObject {
     @Published private(set) var knownNames: [String: String] = [:]
     private(set) var localIdentity = ""
     var onAudioReady: (() -> Void)?
+    var onOutgoingCall: ((LobbyOffer) -> Void)?
     var onAudioEnded: ((String) -> Void)?
     var onCallClosed: ((String) -> Void)?
     var onDisconnected: (() -> Void)?
@@ -529,6 +530,7 @@ final class GroupStore: ObservableObject {
                 : "Calling the selected device. Waiting expires in two minutes."
             expirePending()
             send([offer.message])
+            onOutgoingCall?(offer)
         } catch { disconnect("Could not create an authenticated call.") }
     }
 

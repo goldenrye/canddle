@@ -70,7 +70,8 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         audio.useManualAudio = true
         audio.isAudioEnabled = false
         let configuration = RTCAudioSessionConfiguration.webRTC()
-        configuration.categoryOptions = [.defaultToSpeaker, .allowBluetoothHFP]
+        configuration.categoryOptions = [.allowBluetoothHFP]
+        configuration.mode = AVAudioSession.Mode.voiceChat.rawValue
         configuration.ioBufferDuration = 0.01
         RTCAudioSessionConfiguration.setWebRTC(configuration)
     }
@@ -81,6 +82,16 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         defer { audio.unlockForConfiguration() }
         audio.ignoresPreferredAttributeConfigurationErrors = true
         try audio.setConfiguration(RTCAudioSessionConfiguration.webRTC())
+        try audio.overrideOutputAudioPort(.none)
+    }
+
+    /// Use WebRTC's configuration lock even when changing the shared iOS route.
+    /// `.none` restores the receiver or the user's connected headset.
+    static func setSpeaker(_ enabled: Bool) throws {
+        let audio = RTCAudioSession.sharedInstance()
+        audio.lockForConfiguration()
+        defer { audio.unlockForConfiguration() }
+        try audio.overrideOutputAudioPort(enabled ? .speaker : .none)
     }
 
     static func activate(_ session: AVAudioSession) {

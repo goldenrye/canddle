@@ -27,6 +27,9 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     private var deadline: Task<Void, Never>?
     private var joining: Task<Void, Never>?
     private var audioActive = false
+    private var outgoingAudio = OutgoingCallAudio()
+    private var ringback: AVAudioPlayer?
+    private static let ringbackData = RingbackTone.wave()
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var seen: [String: Date] = [:]
     var hasCall: Bool { uuid != nil }
@@ -163,6 +166,8 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     /// Admission and CallKit audio activation are separate gates.
     func mediaReady() {
         guard let owner, owner.lobby.inCall else { return }
+        outgoingAudio.admit()
+        stopRingback()
         if let answer {
             do { try configureAudio() }
             catch { end(reason: .failed); return }
@@ -178,6 +183,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         }
         if uuid != nil {
             if audioActive {
+                deadline?.cancel(); deadline = nil
                 owner.startGroupAudio()
             } else if offer != nil, let uuid {
                 // Joining via the in-app button must answer the already reported call too.
@@ -187,16 +193,36 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
             }
             return
         }
+        startCall(call: owner.lobby.ownOffer?.id ?? owner.lobby.joining?.offer.id,
+                  individual: owner.lobby.isIndividual, admitted: true)
+    }
+
+    func outgoing(_ offer: LobbyOffer) {
+        guard uuid == nil, owner?.lobby.ownOffer?.id == offer.id else { return }
+        startCall(call: offer.id, individual: offer.target != nil, admitted: false)
+    }
+
+    private func startCall(call: String?, individual: Bool, admitted: Bool) {
         let id = UUID()
         uuid = id
-        callID = owner.lobby.ownOffer?.id ?? owner.lobby.joining?.offer.id
+        callID = call
+        outgoingAudio.start(admitted: admitted)
         let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic,
-            value: owner.lobby.isIndividual ? "canddle individual call" : "canddle group call"))
+            value: individual ? "canddle individual call" : "canddle group call"))
         controller.request(CXTransaction(action: action)) { [weak self] error in
             guard error != nil else { return }
-            Task { @MainActor in self?.end(reason: .failed) }
+            Task { @MainActor in
+                guard self?.uuid == id else { return }
+                self?.end(reason: .failed)
+            }
         }
         setDeadline(seconds: 15)
+    }
+
+    func mediaConnected() {
+        guard let uuid, outgoingAudio.connect() else { return }
+        stopRingback()
+        provider.reportOutgoingCall(with: uuid, connectedAt: Date())
     }
 
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
@@ -205,7 +231,6 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
             try configureAudio()
             action.fulfill()
             provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date())
-            provider.reportOutgoingCall(with: action.callUUID, connectedAt: Date())
         } catch { action.fail(); end(reason: .failed) }
     }
 
@@ -215,16 +240,34 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
             return
         }
         try AVAudioSession.sharedInstance().setCategory(
-            .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth]
+            .playAndRecord, mode: .voiceChat, options: [.allowBluetooth]
         )
+        try AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
     }
 
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+        guard hasCall else { return }
         audioActive = true
+        outgoingAudio.activate()
         WebRTCAudio.activate(audioSession)
         if owner?.lobby.inCall == true {
+            outgoingAudio.admit()
+            stopRingback()
             deadline?.cancel()
             owner?.startGroupAudio()
+        } else if outgoingAudio.shouldPlayRingback {
+            setDeadline(seconds: 120)
+            stopRingback()
+            do {
+                let player = try AVAudioPlayer(data: Self.ringbackData)
+                player.numberOfLoops = -1
+                player.volume = 0.5
+                guard player.play() else { throw VoiceError.audio }
+                ringback = player
+            } catch {
+                // Ringback failure must not prevent the peer answering.
+                owner?.callFailure = "Could not play the dialing tone. The call request is still active."
+            }
         }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
@@ -233,6 +276,8 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        stopRingback()
+        outgoingAudio.deactivate()
         audioActive = false
         WebRTCAudio.deactivate(audioSession)
         if hasCall { end(reason: .failed) }
@@ -276,6 +321,8 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     }
 
     private func reset() {
+        stopRingback()
+        outgoingAudio.reset()
         uuid = nil
         offer = nil
         callID = nil
@@ -283,9 +330,15 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         deadline?.cancel(); deadline = nil
         joining?.cancel(); joining = nil
         audioActive = false
+        owner?.resetSpeaker()
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
         }
+    }
+
+    private func stopRingback() {
+        ringback?.stop()
+        ringback = nil
     }
 }

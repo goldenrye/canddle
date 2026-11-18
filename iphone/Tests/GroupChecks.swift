@@ -144,6 +144,50 @@ struct GroupChecks {
                 print("PASS group \(input.mode)")
                 return
             }
+            if input.mode == "ringback" {
+                let guest = clients[1]
+                var output = OutgoingCallAudio()
+                var calls = 0, admissions = 0, closed = 0
+                host.onOutgoingCall = { offer in
+                    precondition(host.ownOffer?.id == offer.id && !host.inCall)
+                    calls += 1
+                    output.start(admitted: false)
+                    precondition(!output.shouldPlayRingback)
+                    output.activate()
+                }
+                host.onAudioReady = { admissions += 1; output.admit() }
+                host.onCallClosed = { _ in closed += 1; output.reset() }
+                host.connect(settings)
+                guest.connect(settings)
+                try await wait { host.online && guest.online }
+                host.announce(target: guest.ownIdentity)
+                try await wait { guest.offers.count == 1 && !host.sending }
+                precondition(calls == 1 && admissions == 0 && output.shouldPlayRingback)
+                guest.decline(guest.offers[0])
+                try await wait { !host.waiting && !guest.sending }
+                precondition(closed > 0 && !output.shouldPlayRingback)
+                host.announce(target: guest.ownIdentity)
+                try await wait { guest.offers.count == 1 && !host.sending }
+                precondition(calls == 2 && output.shouldPlayRingback)
+                host.cancelRequest()
+                try await wait { !host.waiting && guest.offers.isEmpty }
+                precondition(!output.shouldPlayRingback && admissions == 0)
+                host.announce(target: guest.ownIdentity)
+                try await wait { guest.offers.count == 1 && !host.sending }
+                guest.request(guest.offers[0])
+                try await wait { host.candidates.count == 1 && !guest.sending }
+                guest.confirmCaller()
+                try await wait { host.candidates[0].confirmed && !guest.sending }
+                host.approve(host.candidates[0])
+                try await wait { host.inCall && guest.inCall }
+                precondition(calls == 3 && admissions == 1 && !output.shouldPlayRingback)
+                precondition(output.connect() && !output.connect())
+                host.cancelRequest()
+                try await wait { !host.inCall && !guest.inCall }
+                precondition(!output.shouldPlayRingback)
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode == "rename-directory" {
                 try await directoryRenameChecks(clients, settings: settings)
                 print("PASS group \(input.mode)")

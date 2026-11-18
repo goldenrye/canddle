@@ -47,6 +47,7 @@ final class InterfaceTests: XCTestCase {
         XCTAssertFalse(app.buttons["start"].exists)
         XCTAssertFalse(app.buttons["newInvitation"].exists)
         XCTAssertFalse(app.buttons["importCA"].exists)
+        XCTAssertFalse(app.buttons["speaker"].exists)
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.lifetime = .keepAlways
         add(attachment)

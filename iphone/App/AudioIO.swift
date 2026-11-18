@@ -254,7 +254,8 @@ final class AudioIO {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .voiceChat,
-                                    options: [.defaultToSpeaker, .allowBluetooth])
+                                    options: [.allowBluetooth])
+            if !managedByCallKit { try session.overrideOutputAudioPort(.none) }
             try session.setPreferredSampleRate(48000)
             try session.setPreferredIOBufferDuration(0.02)
             stage = "activate the audio session"

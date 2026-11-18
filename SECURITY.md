@@ -529,6 +529,12 @@ Keychain credentials, public CA trust, identity and verified peers are now
 device-only, accessible after first unlock, to support push-launched call answering.
 CallKit answer does not bypass first-time identity verification or caller admission
 policy (manual by default, optionally automatic for already verified devices).
+Outgoing CallKit audio activation may play a bounded-duration local ringback
+cadence while waiting for admission. This is playback only: WebRTC's manual audio
+gate remains closed and legacy capture is not started until authenticated
+admission and microphone permission. Ringback is not a remote-delivery receipt.
+New calls do not force loudspeaker output; an explicit speaker override is
+cleared at teardown. Headset/receiver routing still follows iOS.
 The relay learns identities, roster
 membership, names, call timing and traffic volume. A malicious relay can deny
 service or suppress updates; authentication does not guarantee delivery, a

@@ -91,6 +91,7 @@ final class CallStore: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var connected = false
     @Published private(set) var muted = false
+    @Published private(set) var speakerEnabled = false
     @Published private(set) var groupAudio = false
     let mediaQuality = CallQualityStore()
     let profilePhoto = ProfilePhotoStore()
@@ -130,6 +131,7 @@ final class CallStore: ObservableObject {
             lobby.rename(name)
         }
         lobby.onAudioReady = { [weak self] in self?.systemCalls.mediaReady() }
+        lobby.onOutgoingCall = { [weak self] offer in self?.systemCalls.outgoing(offer) }
         lobby.onMediaSuspended = { [weak self] in
             guard let self else { return }
             self.rtcAudio?.suspend()
@@ -405,9 +407,11 @@ final class CallStore: ObservableObject {
                 }
                 let audio = AudioIO()
                 self.audio = audio
-                status = "Starting group microphone and speaker..."
+                status = "Starting group audio..."
                 try audio.start(managedByCallKit: true)
                 connected = true
+                refreshSpeaker()
+                systemCalls.mediaConnected()
                 status = "Encrypted group audio. Everyone listed can hear and speak."
                 UIApplication.shared.isIdleTimerDisabled = true
                 observeAudio(id)
@@ -476,6 +480,10 @@ final class CallStore: ObservableObject {
         rtc.onConnected = { [weak self] connected in
             guard let self, self.generation == id else { return }
             if self.connected != connected { self.connected = connected }
+            if connected {
+                self.refreshSpeaker()
+                self.systemCalls.mediaConnected()
+            }
             let status = connected ? "Encrypted WebRTC audio (Opus)." : "Connecting WebRTC audio..."
             if self.status != status { self.status = status }
         }
@@ -559,9 +567,10 @@ final class CallStore: ObservableObject {
                 let audio = AudioIO()
                 self.audio = audio
                 stage = "Audio startup"
-                status = "Starting microphone and speaker..."
+                status = "Starting audio..."
                 try audio.start()
                 connected = true
+                refreshSpeaker()
                 verification = code
                 status = "Authenticated call. Compare verification codes independently."
                 UIApplication.shared.isIdleTimerDisabled = true
@@ -620,6 +629,26 @@ final class CallStore: ObservableObject {
         rtcAudio?.mute(muted)
     }
 
+    func toggleSpeaker() {
+        guard connected else { return }
+        do {
+            try WebRTCAudio.setSpeaker(!speakerEnabled)
+            refreshSpeaker()
+        } catch {
+            callFailure = "Could not change the audio output. Check your connected headset and try again."
+        }
+    }
+
+    private func refreshSpeaker() {
+        let enabled = AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+        if speakerEnabled != enabled { speakerEnabled = enabled }
+    }
+
+    func resetSpeaker() {
+        try? WebRTCAudio.setSpeaker(false)
+        speakerEnabled = false
+    }
+
     private func failWebRTC(_ message: String) {
         callFailure = message
         lobby.disconnect(message)
@@ -664,6 +693,7 @@ final class CallStore: ObservableObject {
         audio = nil
         rtcAudio?.stop()
         rtcAudio = nil
+        resetSpeaker()
         networkMonitor?.cancel(); networkMonitor = nil
         networkChange?.cancel(); networkChange = nil
         networkPath = nil
@@ -693,10 +723,12 @@ final class CallStore: ObservableObject {
             observers.append(NotificationCenter.default.addObserver(
                 forName: event, object: nil, queue: .main
             ) { [weak self] note in
-                guard Self.endsCall(note) else { return }
+                let endsCall = Self.endsCall(note)
+                let routeChanged = note.name == AVAudioSession.routeChangeNotification
                 Task { @MainActor in
-                    guard self?.generation == id else { return }
-                    self?.hangUp("Audio route changed or was interrupted. Start a new call.")
+                    guard let self, self.generation == id else { return }
+                    if routeChanged { self.refreshSpeaker() }
+                    if endsCall { self.hangUp("Audio route changed or was interrupted. Start a new call.") }
                 }
             })
         }
