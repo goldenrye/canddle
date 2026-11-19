@@ -88,6 +88,28 @@ async def test_profile_rollback_and_conflicting_revision_rejected(revision):
             await a.recv()
 
 
+async def test_reconnect_with_resigned_same_revision_is_accepted(monkeypatch):
+    # CryptoKit Ed25519 signatures are randomized, unlike the deterministic test signer,
+    # so a reconnecting phone re-signs the cached revision with different bytes.
+    import vpcomm.group as group_module
+    real = group_module.validate_profile
+    async with group_server() as (group, url):
+        async with client(url) as (a, alice):
+            first = profile(alice, revision="2")
+            await send(a, first)
+            await sync(a)
+        monkeypatch.setattr(group_module, "validate_profile",
+                            lambda message, identity: int(message["revision"]))
+        async with client(url, alice) as (a, _):
+            await send(a, dict(first, signature=first["signature"][::-1]))
+            await sync(a)  # Connection stays open instead of a reconnect loop.
+            assert group.peers[alice.identity].profile == first
+            await send(a, profile(alice, b"", "2"))
+            with pytest.raises(ConnectionClosed):
+                await a.recv()
+        monkeypatch.setattr(group_module, "validate_profile", real)
+
+
 async def test_profile_snapshot_memory_frames_and_rate_are_bounded():
     group = GroupLobby()
     for _ in range(40):

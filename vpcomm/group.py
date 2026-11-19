@@ -403,8 +403,14 @@ class GroupLobby(Lobby):
             previous_profile = peer.profile or self.profile_cache.get(peer.identity)
             if previous_profile:
                 previous = int(previous_profile["revision"])
-                if revision < previous or (revision == previous and message != previous_profile):
+                # Ed25519 signers such as CryptoKit randomize signatures, so a reconnecting
+                # phone re-signs the same revision differently. Compare only signed content.
+                if revision < previous or (
+                    revision == previous and message["photo"] != previous_profile["photo"]
+                ):
                     raise ValueError("Profile rollback or conflicting revision")
+                if revision == previous:
+                    message = previous_profile
             peer.profile = message
             self.profile_cache.pop(peer.identity, None)
             self.profile_cache[peer.identity] = message.copy()
