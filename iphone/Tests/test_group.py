@@ -61,6 +61,10 @@ TOKEN = "group-test-" + "a" * 40
         "profiles",
         "profiles-old",
         "ringback",
+        "missed-cancel",
+        "missed-cancel-away",
+        "missed-timeout",
+        "missed-group-timeout",
     ],
 )
 async def test_native_group(mode, tmp_path):

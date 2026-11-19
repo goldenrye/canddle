@@ -76,8 +76,9 @@ Old clients continue to work with the upgraded relay.
   An individual call from a member's phone icon rings only that selected device.
   Both phones and the relay must support individual calls; no group fallback occurs.
   Delivery is limited to one new ringing attempt per caller per 30 seconds.
-- A VoIP push is promptly reported to CallKit, before network work. The app then
-  validates its signed offer, relay scope, recipient, expiry and duplicate status.
+- A VoIP push is promptly reported to CallKit, before network work. The app
+  validates its signed offer, relay scope, recipient, expiry and duplicate status,
+  and persists valid incoming state before CallKit actions or PushKit completion.
   Invalid/stale calls are ended. No cancellation or generic notification pushes
   are sent as VoIP pushes.
 - Answer requests admission for a previously verified caller. The caller
@@ -106,21 +107,37 @@ Old clients continue to work with the upgraded relay.
 In Canddle **Settings > Missed calls**, tap **Enable missed-call icon badge** and
 allow access. This requests badge permission only, not notification sounds or
 banners. If already denied, enable **Badges** in iPhone notification settings.
+The Calls page also shows the permission action when badges are not enabled,
+even before the first missed call. In-app missed-call history does not require
+notification permission.
 Uncleared missed calls show a native red number on the existing Canddle icon,
 not the Phone icon. Expand **Missed calls** on the Calls page and tap
 **Clear missed calls** to remove the count; simply opening the app does not clear it.
 
 Authenticated incoming group and individual invitations are recorded when observed.
 An unanswered ringing timeout or a relay-reported call closure marks them missed.
+An interruption/provider reset that ends a presented, unanswered call also records
+a miss. Authentication/reporting failures before presentation do not.
 Valid pushes explicitly filtered by CallKit's Do Not Disturb policy also count;
 blocked, invalid and other failed CallKit reports do not.
-Explicit Answer, in-app Join, and Decline do not count as missed, even if subsequent
+Explicit Answer, in-app Join, and Decline before timeout do not count as missed, even if subsequent
 verification or audio setup fails. Push/socket duplicates and repeated closures
 are deduplicated by relay and call ID within a bounded 128-entry journal.
-Connection loss alone and process relaunch are not treated as proof of a missed call.
+Each invitation has a persisted unanswered deadline: 30 seconds after a VoIP push,
+or 120 seconds for a socket-only invitation. Duplicate delivery can shorten but
+never extend it. Connection loss alone does not immediately mark a miss, but the
+deadline still applies without a close message. Relaunch/foreground entry recovers
+expired invitations, including old journal entries that were left ringing.
+
+With badge permission enabled, up to 32 silent local badge updates are scheduled
+with iOS for pending deadlines. They contain only a badge count and an opaque
+identifier, not caller names, audio, sounds or banners. Answer/decline/clear update
+or cancel these requests; serialized writes prevent an older request from
+overwriting newer state. This is a fallback for suspension, not a guarantee of
+exact OS delivery timing. The in-app journal is authoritative on foreground entry.
 
 The journal persists locally in preferences and contains relay URL, call ID,
-caller public key/name, group flag, timestamp and outcome, but no audio or credentials.
+caller public key/name, group flag, timestamp, deadline and outcome, but no audio or credentials.
 Clearing retains deduplication receipts; **Forget saved relay** erases the journal
 and badge count. Entries can appear in device backups; they are not Keychain secrets.
 Calls never delivered to the app cannot be recovered as missed calls. APNs,
@@ -130,6 +147,8 @@ the existing calling/profile support is required for these client-side changes.
 On a provisioned iPhone, enable badges, lock the receiver and let a call time out;
 check the Canddle icon count. Repeat with caller cancellation, Answer, Decline,
 duplicate delivery, relaunch, denied badge permission, and clearing from the app.
+Repeat with the receiving socket disconnected before the caller cancels, an
+interruption/provider reset before Answer, and process suspension across the deadline.
 After clearing, verify the badge does not return when reopening the app or
 returning from notification settings.
 

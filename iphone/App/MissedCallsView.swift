@@ -8,8 +8,31 @@ final class CallBadgeStore: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var requesting = false
     private let history: MissedCallStore
-    private var writer: Task<Void, Never>?
-    private var revision = 0
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private lazy var synchronizer = MissedCallBadgeSync(history: history, write: { count, updates in
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        center.removePendingNotificationRequests(withIdentifiers:
+            pending.map(\.identifier).filter { $0.hasPrefix("canddle.missed.") })
+        let delivered = await center.deliveredNotifications()
+        center.removeDeliveredNotifications(withIdentifiers:
+            delivered.map(\.request.identifier).filter { $0.hasPrefix("canddle.missed.") })
+        try await center.setBadgeCount(count)
+        let settings = await center.notificationSettings()
+        guard settings.badgeSetting == .enabled else { return }
+        for update in updates {
+            let content = UNMutableNotificationContent()
+            content.badge = NSNumber(value: update.count)
+            let trigger = UNTimeIntervalNotificationTrigger(
+                timeInterval: max(1, update.date.timeIntervalSinceNow), repeats: false)
+            try await center.add(UNNotificationRequest(
+                identifier: update.id, content: content, trigger: trigger))
+        }
+    }, report: { [weak self] error in
+        self?.error = error == nil ? nil : "Icon badge unavailable. Missed calls are still saved here."
+    }, finished: { [weak self] in
+        self?.releaseBackgroundTask()
+    })
 
     init(history: MissedCallStore) {
         self.history = history
@@ -17,6 +40,7 @@ final class CallBadgeStore: ObservableObject {
     }
 
     func refresh() async {
+        history.reconcile()
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         if settings.authorizationStatus == .notDetermined {
             permission = .notRequested
@@ -37,25 +61,19 @@ final class CallBadgeStore: ObservableObject {
     }
 
     func synchronize() {
-        revision += 1
-        guard writer == nil else { return }
-        // Finish badge writes while handling a lock-screen call, and serialize them so clear wins.
-        let background = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
-        writer = Task {
-            defer {
-                writer = nil
-                if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+        // Reserve time synchronously, before CallKit teardown can end its background task.
+        if backgroundTask == .invalid {
+            backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+                Task { @MainActor in self?.releaseBackgroundTask() }
             }
-            while true {
-                let version = revision
-                do {
-                    try await UNUserNotificationCenter.current().setBadgeCount(history.count)
-                    error = nil
-                } catch {
-                    self.error = "Icon badge unavailable. Missed calls are still saved here."
-                }
-                if version == revision { return }
-            }
+        }
+        synchronizer.synchronize()
+    }
+
+    private func releaseBackgroundTask() {
+        if backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTask)
+            backgroundTask = .invalid
         }
     }
 }
@@ -89,6 +107,12 @@ struct MissedCallsSection: View {
                 BadgePermissionView(badge: badge)
             }
             .accessibilityIdentifier("missedCalls")
+        } else if badge.permission == .notRequested || badge.permission == .disabled {
+            Section {
+                BadgePermissionView(badge: badge)
+                Text("Allow badges to see missed calls on the Canddle icon. Calls are still saved here without permission.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }

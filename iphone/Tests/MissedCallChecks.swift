@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 @main struct MissedCallChecks {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let suite = "canddle.missed-checks.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -80,6 +80,102 @@ import Foundation
         precondition(MissedCallStore(defaults: defaults).count == 128)
         loaded.forget()
         precondition(MissedCallStore(defaults: defaults).entries.isEmpty)
-        print("PASS missed-call deduplication, handling, clearing, persistence, bounds and push validation")
+
+        var now = Date(timeIntervalSince1970: 1000)
+        let timed = MissedCallStore(defaults: defaults, automaticallyExpire: false, clock: { now })
+        let pending = try offer()
+        timed.receive(pending, scope: scope, name: pending.name)
+        precondition(timed.badgeUpdates().first?.date == now.addingTimeInterval(120))
+        now.addTimeInterval(10)
+        timed.receive(pending, scope: scope, name: pending.name, timeout: 30)
+        let shortened = timed.badgeUpdates()[0]
+        precondition(shortened.date == Date(timeIntervalSince1970: 1040) && shortened.count == 1)
+        now.addTimeInterval(10)
+        timed.receive(pending, scope: scope, name: pending.name, timeout: 30)
+        precondition(timed.badgeUpdates()[0] == shortened, "Duplicate push cannot restart ringing")
+        now.addTimeInterval(21)
+        // No closed event and no live Task: a fresh process must recover the expired invitation.
+        let resumed = MissedCallStore(defaults: defaults, automaticallyExpire: false, clock: { now })
+        precondition(resumed.count == 1 && resumed.badgeUpdates().isEmpty)
+        precondition(resumed.missed[0].date == shortened.date)
+        resumed.declined(pending.id, scope: scope)
+        precondition(resumed.count == 1, "A late system end cannot erase a timeout")
+        resumed.clear()
+        resumed.closed(pending.id, scope: scope)
+        precondition(resumed.count == 0)
+        resumed.forget()
+
+        let afterSuspension = try offer()
+        resumed.receive(afterSuspension, scope: scope, name: afterSuspension.name, timeout: 30)
+        now.addTimeInterval(31)
+        resumed.reconcile()
+        precondition(resumed.count == 1)
+        resumed.handled(afterSuspension.id, scope: scope)
+        precondition(resumed.count == 0, "An actual late answer may clear the missed invitation")
+        resumed.forget()
+
+        let sameTimeA = try offer(), sameTimeB = try offer()
+        resumed.receive(sameTimeA, scope: scope, name: sameTimeA.name, timeout: 30)
+        resumed.receive(sameTimeB, scope: scope, name: sameTimeB.name, timeout: 30)
+        precondition(resumed.badgeUpdates().allSatisfy { $0.count == 2 })
+        resumed.declined(sameTimeA.id, scope: scope)
+        precondition(resumed.badgeUpdates().count == 1 && resumed.badgeUpdates()[0].count == 1)
+        resumed.handled(sameTimeB.id, scope: scope)
+        now.addTimeInterval(31)
+        resumed.reconcile()
+        precondition(resumed.count == 0 && resumed.badgeUpdates().isEmpty)
+        resumed.forget()
+
+        // Migrate records from the original journal, which had no durable ringing deadline.
+        let old = MissedCallStore.Entry(scope: scope, call: first.id, caller: first.identity,
+            name: first.name, group: false, date: now.addingTimeInterval(-121),
+            outcome: .ringing, deadline: nil)
+        defaults.set(try JSONEncoder().encode([old]), forKey: "missedCalls.v1")
+        let migrated = MissedCallStore(defaults: defaults, automaticallyExpire: false, clock: { now })
+        precondition(migrated.count == 1)
+        migrated.forget()
+
+        for action in ["answer", "decline", "clear"] {
+            let journal = MissedCallStore(defaults: defaults, automaticallyExpire: false)
+            var writes: [(Int, [MissedCallStore.BadgeUpdate])] = []
+            var gate: CheckedContinuation<Void, Never>?
+            let synchronizer = MissedCallBadgeSync(history: journal, write: { count, updates in
+                writes.append((count, updates))
+                if writes.count == 1 { await withCheckedContinuation { gate = $0 } }
+            })
+            journal.onChange = { [weak synchronizer] in synchronizer?.synchronize() }
+            let invitation = try offer()
+            journal.receive(invitation, scope: scope, name: invitation.name, timeout: 30)
+            let limit = Date().addingTimeInterval(2)
+            while gate == nil {
+                precondition(Date() < limit)
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            precondition(writes[0].1.count == 1)
+            if action == "answer" { journal.handled(invitation.id, scope: scope) }
+            else if action == "decline" { journal.declined(invitation.id, scope: scope) }
+            else {
+                journal.closed(invitation.id, scope: scope)
+                journal.clear()
+            }
+            gate?.resume()
+            await synchronizer.flush()
+            precondition(writes.count == 2 && writes.last!.0 == 0 && writes.last!.1.isEmpty,
+                         "The latest state must cancel an older scheduled badge after \(action)")
+            journal.onChange = nil
+            journal.forget()
+        }
+
+        let automatic = MissedCallStore(defaults: defaults)
+        let unanswered = try offer()
+        automatic.receive(unanswered, scope: scope, name: unanswered.name, timeout: 1)
+        let until = Date().addingTimeInterval(3)
+        while automatic.count == 0 {
+            precondition(Date() < until, "Unanswered timer failed without a relay close")
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        precondition(automatic.badgeUpdates().isEmpty)
+        automatic.forget()
+        print("PASS missed calls: expiry without close, suspension/relaunch, migration, duplicate deadlines, answer/decline, serialized badge cancellation, bounds and push validation")
     }
 }

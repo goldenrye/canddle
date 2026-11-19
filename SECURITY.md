@@ -529,10 +529,16 @@ optional sharing; see [Profile Photos](iphone/README.md#profile-photos).
 
 The iPhone's missed-call journal stores at most 128 observed authenticated incoming
 calls in local preferences (relay URL, call ID, caller public key/name, timestamp,
-group flag and outcome). It contains no audio or bearer credentials and may appear
+unanswered deadline, group flag and outcome). It contains no audio or bearer credentials and may appear
 in device backups. Badge permission is separate from PushKit provisioning.
-Answer/decline suppress a miss; a mere socket failure is not evidence of a missed
-call. Clear marks entries reviewed while retaining bounded deduplication receipts;
+Answer/decline before timeout suppress a miss. A socket failure alone does not
+immediately mark a miss, but persisted deadlines (30 seconds for push, 120 seconds
+for socket-only invitations) are reconciled after suspension/relaunch. Presented
+incoming calls ended by interruptions/provider resets are missed unless handled.
+At most 32 silent local badge requests are scheduled with iOS; they contain a
+projected count and hashed relay/call identifier, not caller names or credentials.
+Answer/decline/clear replace these schedules using serialized writes.
+Clear marks entries reviewed while retaining bounded deduplication receipts;
 forgetting the saved relay erases them. This is local UI history, not a signed audit
 trail or a guarantee of delivery. See [missed-call behavior](iphone/BACKGROUND_CALLS.md#missed-call-badge).
 

@@ -197,6 +197,47 @@ struct GroupChecks {
                 print("PASS group \(input.mode)")
                 return
             }
+            if input.mode.hasPrefix("missed-") {
+                let guest = clients[1]
+                let history = MissedCallStore(defaults: defaults[1])
+                var badge = -1
+                let badgeWriter = MissedCallBadgeSync(history: history, write: { count, _ in badge = count })
+                history.onChange = { [weak badgeWriter] in badgeWriter?.synchronize() }
+                guest.onIncomingCall = {
+                    history.receive($0, scope: guest.relayScope, name: $0.name, timeout: 1)
+                }
+                guest.onIncomingHandled = { history.handled($0, scope: guest.relayScope) }
+                guest.onCallClosed = { history.closed($0, scope: guest.relayScope) }
+                host.connect(settings)
+                guest.connect(settings)
+                try await wait { host.online && guest.online }
+                host.announce(target: input.mode == "missed-group-timeout" ? nil : guest.ownIdentity)
+                try await wait { guest.offers.count == 1 && !host.sending }
+                let incoming = guest.offers[0]
+                precondition(history.count == 0 && history.badgeUpdates().count == 1)
+                if input.mode == "missed-cancel-away" {
+                    guest.disconnect()
+                    precondition(history.count == 0, "Socket loss alone is not an immediate miss")
+                    host.cancelRequest()
+                } else if input.mode == "missed-cancel" {
+                    host.cancelRequest()
+                }
+                try await wait { history.count == 1 }
+                await badgeWriter.flush()
+                precondition(badge == 1 && history.missed[0].call == incoming.id)
+                if input.mode.hasSuffix("timeout") {
+                    precondition(host.waiting, "Local timeout must work without a relay close")
+                }
+                let restored = MissedCallStore(defaults: defaults[1])
+                precondition(restored.count == 1 && restored.missed[0].name == host.name)
+                history.clear()
+                await badgeWriter.flush()
+                precondition(badge == 0)
+                history.closed(incoming.id, scope: guest.relayScope)
+                precondition(history.count == 0)
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode == "ringback" {
                 let guest = clients[1]
                 let history = MissedCallStore(defaults: defaults[1])
