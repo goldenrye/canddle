@@ -61,6 +61,8 @@ private struct SavedRelay: Codable {
 final class CallStore: ObservableObject {
     static let shared = CallStore()
     let lobby = GroupStore()
+    let missedCalls = MissedCallStore()
+    lazy var callBadge = CallBadgeStore(history: missedCalls)
     lazy var systemCalls = SystemCalls(owner: self)
     @Published var address = "" { didSet { saveRelay() } }
     @Published var token = "" { didSet { saveRelay() } }
@@ -132,6 +134,17 @@ final class CallStore: ObservableObject {
         }
         lobby.onAudioReady = { [weak self] in self?.systemCalls.mediaReady() }
         lobby.onOutgoingCall = { [weak self] offer in self?.systemCalls.outgoing(offer) }
+        // Install the badge writer at launch, including a background VoIP launch.
+        _ = callBadge
+        lobby.onIncomingCall = { [weak self] offer in
+            guard let self else { return }
+            self.missedCalls.receive(offer, scope: self.lobby.relayScope,
+                name: self.lobby.trustedName(offer.identity) ?? offer.name)
+        }
+        lobby.onIncomingHandled = { [weak self] call in
+            guard let self else { return }
+            self.missedCalls.handled(call, scope: self.lobby.relayScope)
+        }
         lobby.onMediaSuspended = { [weak self] in
             guard let self else { return }
             self.rtcAudio?.suspend()
@@ -151,7 +164,11 @@ final class CallStore: ObservableObject {
         }
         lobby.onWebRTCSignal = { [weak self] signal in self?.rtcAudio?.receive(signal) }
         lobby.onWebRTCCandidate = { [weak self] candidate in self?.rtcAudio?.receive(candidate) }
-        lobby.onCallClosed = { [weak self] call in self?.systemCalls.closed(call) }
+        lobby.onCallClosed = { [weak self] call in
+            guard let self else { return }
+            self.missedCalls.closed(call, scope: self.lobby.relayScope)
+            self.systemCalls.closed(call)
+        }
         lobby.onDisconnected = { [weak self] in self?.systemCalls.disconnected() }
         lobby.onAudioEnded = { [weak self] message in
             guard let self, self.groupAudio else { return }
@@ -224,6 +241,8 @@ final class CallStore: ObservableObject {
         lobby.disconnect()
         do {
             try SavedRelay.remove()
+            lobby.forgetMemberPhotos()
+            missedCalls.forget()
             clearingRelay = true
             address = ""
             token = ""

@@ -69,6 +69,18 @@ final class InterfaceTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Your photo"].exists)
     }
 
+    @MainActor func testMissedCallBadgePermissionIsDiscoverable() {
+        let app = XCUIApplication()
+        app.launch()
+        settings(app)
+        for _ in 0..<4 {
+            if app.buttons["requestCallBadge"].exists || app.buttons["callBadgeSettings"].exists
+                || app.descendants(matching: .any)["callBadgeEnabled"].firstMatch.exists { return }
+            app.swipeUp()
+        }
+        XCTFail("Settings must offer badge permission, a Settings link, or enabled status")
+    }
+
     @MainActor func testAutoAcceptPreferencePersists() {
         let app = XCUIApplication()
         app.launch()
@@ -269,6 +281,8 @@ final class InterfaceTests: XCTestCase {
         XCTAssertFalse(app.buttons["Start call"].exists)
         let membersHeader = app.staticTexts["groupMembersHeader"]
         XCTAssertTrue(membersHeader.exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "(you)"))
+            .firstMatch.exists, "Idle directory must include this device's photo row")
         XCTAssertLessThan(membersHeader.frame.maxY, app.buttons["lobbyAnnounce"].frame.minY)
         XCTAssertFalse(app.staticTexts["Available calls"].exists)
         XCTAssertFalse(app.staticTexts["Incoming calls"].exists)

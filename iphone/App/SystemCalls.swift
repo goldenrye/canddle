@@ -23,6 +23,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     private var uuid: UUID?
     private var offer: LobbyOffer?
     private var callID: String?
+    private var incomingScope: String?
     private var answer: CXAnswerCallAction?
     private var deadline: Task<Void, Never>?
     private var joining: Task<Void, Never>?
@@ -85,14 +86,6 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
             completion()
             Task { @MainActor in
                 guard let self else { return }
-                guard error == nil else {
-                    if self.uuid == id { self.reset() }
-                    return
-                }
-                guard !wasBusy, self.uuid == id else {
-                    self.provider.reportCall(with: id, endedAt: Date(), reason: .unanswered)
-                    return
-                }
                 do {
                     guard type == .voIP, let owner = self.owner else { throw VoiceError.packet }
                     let scope = try RelaySettings(address: owner.address, token: owner.token).url.absoluteString
@@ -100,11 +93,31 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
                     let ownKey = try Curve25519.Signing.PrivateKey(rawRepresentation: identity.secret)
                     let ownID = VoiceProtocol.base64(ownKey.publicKey.rawRepresentation)
                     let offer = try IncomingCallPush(payload.dictionaryPayload, scope: scope, recipient: ownID).offer
+                    let callerName = identity.trusted[scope + "|" + offer.identity] ?? "Unverified Canddle caller"
+                    if let error = error as NSError? {
+                        // Focus may silence a valid call; it is still missed, unlike blocked/invalid calls.
+                        if error.domain == CXErrorDomainIncomingCall,
+                           error.code == CXErrorCodeIncomingCallError.filteredByDoNotDisturb.rawValue {
+                            owner.missedCalls.receive(offer, scope: scope, name: callerName)
+                            owner.missedCalls.closed(offer.id, scope: scope)
+                        }
+                        if self.uuid == id { self.reset() }
+                        return
+                    }
+                    owner.missedCalls.receive(offer, scope: scope,
+                        name: callerName)
+                    guard !wasBusy, self.uuid == id else {
+                        // A repeated push for our current call is not a second missed call.
+                        if self.callID != offer.id { owner.missedCalls.closed(offer.id, scope: scope) }
+                        self.provider.reportCall(with: id, endedAt: Date(), reason: .unanswered)
+                        return
+                    }
                     self.seen = self.seen.filter { $0.value > Date().addingTimeInterval(-120) }
                     guard self.seen[offer.id] == nil, self.seen.count < 128 else { throw VoiceError.packet }
                     self.seen[offer.id] = Date()
                     self.offer = offer
                     self.callID = offer.id
+                    self.incomingScope = scope
                     // Display saved names only after checking the caller's signed offer.
                     update.localizedCallerName = identity.trusted[scope + "|" + offer.identity]
                         ?? "Unverified Canddle caller"
@@ -112,11 +125,14 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
                         value: offer.target == nil ? "Canddle group call" : "Canddle individual call")
                     self.provider.reportCall(with: id, updated: update)
                     self.backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
-                        Task { @MainActor in self?.end(reason: .failed) }
+                        Task { @MainActor in self?.end(reason: .unanswered) }
                     }
                     self.setDeadline(seconds: 30)
                     owner.openLobby(automatic: true)
-                } catch { self.end(reason: .failed) }
+                } catch {
+                    if self.uuid == id { self.end(reason: .failed) }
+                    else { self.provider.reportCall(with: id, endedAt: Date(), reason: .failed) }
+                }
             }
         }
     }
@@ -133,6 +149,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         guard action.callUUID == uuid, let offer, let owner else { action.fail(); return }
+        if let incomingScope { owner.missedCalls.handled(offer.id, scope: incomingScope) }
         guard AVAudioSession.sharedInstance().recordPermission == .granted else {
             owner.callFailure = "Open Canddle and grant microphone access before answering a locked-screen call."
             action.fail()
@@ -287,6 +304,9 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         guard action.callUUID == uuid else { action.fulfill(); return }
         let declined = offer
+        if let offer, let incomingScope {
+            owner?.missedCalls.handled(offer.id, scope: incomingScope)
+        }
         reset()
         owner?.endSystemCall(declining: declined)
         action.fulfill()
@@ -312,10 +332,19 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         if callID == call { end(reason: .remoteEnded) }
     }
 
-    func disconnected() { if hasCall { end(reason: .remoteEnded) } }
+    func disconnected() {
+        // An unavailable relay must not erase an unanswered push. Its ringing deadline still applies.
+        if let offer, let incomingScope,
+           owner?.missedCalls.isRinging(offer.id, scope: incomingScope) == true { return }
+        if hasCall { end(reason: .failed) }
+    }
 
     private func end(reason: CXCallEndedReason) {
         guard let uuid else { return }
+        if (reason == .unanswered || reason == .remoteEnded),
+           let offer, let incomingScope {
+            owner?.missedCalls.closed(offer.id, scope: incomingScope)
+        }
         provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
         reset()
         owner?.endSystemCall()
@@ -327,6 +356,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         uuid = nil
         offer = nil
         callID = nil
+        incomingScope = nil
         answer?.fail(); answer = nil
         deadline?.cancel(); deadline = nil
         joining?.cancel(); joining = nil

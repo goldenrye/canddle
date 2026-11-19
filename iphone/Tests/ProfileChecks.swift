@@ -75,6 +75,25 @@ import UniformTypeIdentifiers
         let suite = "canddle.profile-checks.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        let cache = MemberProfileCache(defaults: defaults)
+        let scope = "wss://family.example/relay"
+        cache.save([signed.identity: signed], scope: scope)
+        precondition(MemberProfileCache(defaults: defaults).load(scope: scope)[signed.identity] == signed)
+        precondition(cache.load(scope: "wss://another.example/relay").isEmpty)
+        cache.save([removed.identity: removed], scope: scope)
+        precondition(cache.load(scope: scope)[removed.identity]?.photo.isEmpty == true)
+        // Reload keeps the highest signed revision even if the saved array contains a replay.
+        let duplicates: [String: Any] = ["scope": scope, "profiles": [removed.message, signed.message, forged]]
+        defaults.set(try JSONSerialization.data(withJSONObject: duplicates), forKey: "memberProfiles.v1")
+        precondition(cache.load(scope: scope)[removed.identity]?.revision == 2)
+        precondition(cache.load(scope: scope).count == 1)
+        defaults.set(Data(count: 1_100_001), forKey: "memberProfiles.v1")
+        precondition(cache.load(scope: scope).isEmpty)
+        let tooMany: [String: Any] = ["scope": scope, "profiles": Array(repeating: signed.message, count: 129)]
+        defaults.set(try JSONSerialization.data(withJSONObject: tooMany), forKey: "memberProfiles.v1")
+        precondition(cache.load(scope: scope).isEmpty)
+        cache.clear()
+        precondition(cache.load(scope: scope).isEmpty)
         let store = ProfilePhotoStore(defaults: defaults)
         var changes = 0
         store.onChange = { _, _ in changes += 1 }

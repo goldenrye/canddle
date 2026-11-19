@@ -54,6 +54,7 @@ final class GroupStore: ObservableObject {
     @Published private(set) var presenceSupported = false
     @Published private(set) var profilesSupported = false
     @Published private(set) var profiles: [String: DeviceProfile] = [:]
+    private let profileCache: MemberProfileCache
     private var profilePhoto = Data()
     private var profileRevision: UInt64 = 0
     private var profileTask: Task<Void, Never>?
@@ -65,6 +66,8 @@ final class GroupStore: ObservableObject {
     private(set) var localIdentity = ""
     var onAudioReady: (() -> Void)?
     var onOutgoingCall: ((LobbyOffer) -> Void)?
+    var onIncomingCall: ((LobbyOffer) -> Void)?
+    var onIncomingHandled: ((String) -> Void)?
     var onAudioEnded: ((String) -> Void)?
     var onCallClosed: ((String) -> Void)?
     var onDisconnected: (() -> Void)?
@@ -84,6 +87,7 @@ final class GroupStore: ObservableObject {
     private var deadline: Task<Void, Never>?
     private var generation = UUID()
     private var scope = ""
+    var relayScope: String { scope }
     private var sessionName = ""
     private var roster: GroupRoster?
     private var proposed: GroupRoster?
@@ -96,9 +100,11 @@ final class GroupStore: ObservableObject {
     private var blockedAutomaticAdmissions = Set<String>()
 
     init(loadIdentity: @escaping () throws -> LobbyIdentity = LobbyIdentity.load,
-         saveIdentity: @escaping (LobbyIdentity) throws -> Void = { try $0.save() }) {
+         saveIdentity: @escaping (LobbyIdentity) throws -> Void = { try $0.save() },
+         profileCache: MemberProfileCache = MemberProfileCache()) {
         self.loadIdentity = loadIdentity
         self.saveIdentity = saveIdentity
+        self.profileCache = profileCache
     }
 
     var waiting: Bool { ownOffer != nil || joining != nil }
@@ -208,7 +214,7 @@ final class GroupStore: ObservableObject {
             if scope != settings.url.absoluteString {
                 knownNames = [:]
                 presence = [:]
-                profiles = [:]
+                profiles = profileCache.load(scope: settings.url.absoluteString)
             }
             localIdentity = VoiceProtocol.base64(key.publicKey.rawRepresentation)
             identity = saved
@@ -420,7 +426,7 @@ final class GroupStore: ObservableObject {
         signing = nil; identity = nil
         offers = []; active = false; online = false; sending = false
         presence = [:]; presenceReady = false; presenceSupported = false; presenceTruncated = false
-        profiles = [:]; profilesSupported = false
+        profilesSupported = false
         autoStart = false
         startTarget = nil; directCallsSupported = false
         webRTCSupported = false; qualitySupported = false; qualityPathSupported = false; iceServers = []
@@ -550,6 +556,7 @@ final class GroupStore: ObservableObject {
               !offer.usesWebRTC || webRTCSupported,
               offer.target == nil || offer.target == ownIdentity,
               offers.contains(where: { $0.id == offer.id }) else { return }
+        onIncomingHandled?(offer.id)
         pendingLegacyCall = nil
         do {
             let key = Curve25519.KeyAgreement.PrivateKey()
@@ -572,6 +579,7 @@ final class GroupStore: ObservableObject {
     func decline(_ offer: LobbyOffer) {
         guard online, !sending, offer.target == ownIdentity,
               offers.contains(where: { $0.id == offer.id }) else { return }
+        onIncomingHandled?(offer.id)
         send([["type": "direct-decline", "call": offer.id]])
         offers.removeAll { $0.id == offer.id }
         notification = nil
@@ -707,8 +715,14 @@ final class GroupStore: ObservableObject {
             saved.trusted = [:]
             try saveIdentity(saved)
             trusted = [:]
+            forgetMemberPhotos()
             status = "Verified peers forgotten. Compare codes next time."
         } catch { status = "Could not forget verified peers." }
+    }
+
+    func forgetMemberPhotos() {
+        profiles = [:]
+        profileCache.clear()
     }
 
     func transmit(_ frame: Data) async throws {
@@ -772,6 +786,7 @@ final class GroupStore: ObservableObject {
             if let previous = profiles[profile.identity], previous.revision >= profile.revision { return }
             guard profiles[profile.identity] != nil || profiles.count < 128 else { return }
             profiles[profile.identity] = profile
+            profileCache.save(profiles, scope: scope)
         case "recovery-ready":
             guard recoverySupported, Set(message.keys) == ["type", "token"],
                   let token = message["token"] else { throw VoiceError.packet }
@@ -883,6 +898,7 @@ final class GroupStore: ObservableObject {
             }
             guard offers.count < 32, !offers.contains(where: { $0.id == offer.id }) else { throw VoiceError.packet }
             offers.append(offer)
+            onIncomingCall?(offer)
             if !waiting {
                 notify(offer.target == nil
                        ? "Group call from \(offer.name). Tap Join group call below."

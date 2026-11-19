@@ -155,9 +155,9 @@ struct LobbyView: View {
     private var directoryMembers: [GroupPresence] {
         let occupied = Set(lobby.members.map(\.id))
         return lobby.groupDirectory.filter {
-            $0.id != lobby.localIdentity && (!(lobby.waiting || callBusy)
-                || (!occupied.contains($0.id) && $0.id != lobby.ownOffer?.target
-                    && $0.id != lobby.joining?.offer.identity))
+            !(lobby.waiting || callBusy)
+                || ($0.id != lobby.localIdentity && !occupied.contains($0.id)
+                    && $0.id != lobby.ownOffer?.target && $0.id != lobby.joining?.offer.identity)
         }
     }
 

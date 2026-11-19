@@ -83,13 +83,20 @@ struct GroupChecks {
                     }
                 }
             }
+            let suites = (0..<7).map { _ in "canddle.group-checks.\(UUID())" }
+            let defaults = suites.map { UserDefaults(suiteName: $0)! }
+            defer {
+                for (index, suite) in suites.enumerated() {
+                    defaults[index].removePersistentDomain(forName: suite)
+                }
+            }
             let clients = (0..<7).map { index in
                 GroupStore(loadIdentity: { saved[index] }, saveIdentity: {
                     if input.mode == "save-failure" || (input.mode == "caller-save-failure" && index == 0) {
                         throw VoiceError.ended
                     }
                     saved[index] = $0
-                })
+                }, profileCache: MemberProfileCache(defaults: defaults[index]))
             }
             for (index, client) in clients.enumerated() { client.name = "Phone \(index)" }
             precondition(!clients[1].rename(""))
@@ -137,6 +144,23 @@ struct GroupChecks {
                     let custom = Data([0xff, 0xd8, 1, 2, 0xff, 0xd9])
                     host.updateProfile(photo: custom, revision: 2)
                     try await wait(seconds: 8) { guest.profiles[host.ownIdentity]?.photo == custom }
+                    let hostID = host.ownIdentity
+                    guest.disconnect()
+                    precondition(guest.profiles[hostID]?.photo == custom)
+                    host.disconnect()
+                    guest.connect(settings)
+                    try await wait { guest.online && guest.presenceReady }
+                    precondition(guest.profiles[hostID]?.photo == custom)
+                    let reloaded = GroupStore(loadIdentity: { saved[1] }, saveIdentity: { saved[1] = $0 },
+                        profileCache: MemberProfileCache(defaults: defaults[1]))
+                    guest.disconnect()
+                    reloaded.connect(settings)
+                    try await wait { reloaded.online }
+                    precondition(reloaded.profiles[hostID]?.photo == custom)
+                    reloaded.disconnect()
+                    guest.connect(settings)
+                    host.connect(settings)
+                    try await wait { guest.online && host.online }
                     host.updateProfile(photo: Data(), revision: 3)
                     try await wait(seconds: 8) { guest.profiles[host.ownIdentity]?.photo.isEmpty == true }
                     precondition(host.online && guest.online && host.trusted.isEmpty && guest.trusted.isEmpty)
@@ -146,6 +170,10 @@ struct GroupChecks {
             }
             if input.mode == "ringback" {
                 let guest = clients[1]
+                let history = MissedCallStore(defaults: defaults[1])
+                guest.onIncomingCall = { history.receive($0, scope: guest.relayScope, name: $0.name) }
+                guest.onIncomingHandled = { history.handled($0, scope: guest.relayScope) }
+                guest.onCallClosed = { history.closed($0, scope: guest.relayScope) }
                 var output = OutgoingCallAudio()
                 var calls = 0, admissions = 0, closed = 0
                 host.onOutgoingCall = { offer in
@@ -171,15 +199,19 @@ struct GroupChecks {
                 guest.decline(guest.offers[0])
                 try await wait { !host.waiting && !guest.sending }
                 precondition(closed > 0 && !output.shouldPlayRingback)
+                precondition(history.count == 0, "Declining must not create a missed call")
                 host.announce(target: guest.ownIdentity)
                 try await wait { guest.offers.count == 1 && !host.sending }
                 precondition(calls == 2 && output.shouldPlayRingback)
                 host.cancelRequest()
                 try await wait { !host.waiting && guest.offers.isEmpty }
                 precondition(!output.shouldPlayRingback && admissions == 0)
+                precondition(history.count == 1, "Caller cancellation must record an unanswered invitation")
+                history.clear()
                 host.announce(target: guest.ownIdentity)
                 try await wait { guest.offers.count == 1 && !host.sending }
                 guest.request(guest.offers[0])
+                precondition(history.count == 0)
                 try await wait { host.candidates.count == 1 && !guest.sending }
                 precondition(guest.callPhase() == .verifyCaller)
                 precondition(host.callPhase() == .peerVerification)
@@ -198,6 +230,7 @@ struct GroupChecks {
                 try await wait { !host.inCall && !guest.inCall }
                 precondition(host.callPhase() == .ready && guest.callPhase() == .ready)
                 precondition(!output.shouldPlayRingback)
+                precondition(history.count == 0, "Ending an answered call must not restore the badge")
                 print("PASS group \(input.mode)")
                 return
             }

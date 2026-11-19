@@ -28,6 +28,7 @@ struct CanddleApp: App {
                 .onChange(of: phase) { if $0 == .background { call.background() } }
                 .task(id: phase) {
                     guard phase == .active else { return }
+                    await call.callBadge.refresh()
                     // Retry only the listening connection, never a call or admission.
                     while !Task.isCancelled {
                         call.connectAutomatically()
@@ -50,6 +51,7 @@ struct CallView: View {
         NavigationStack {
             List {
                 CallStatusCard(call: call, lobby: lobby, configured: configured)
+                MissedCallsSection(history: call.missedCalls, badge: call.callBadge)
                 if let notification = lobby.notification {
                     HStack(spacing: 8) {
                         Label(notification, systemImage: "info.circle")
@@ -204,6 +206,11 @@ struct RelaySettingsView: View {
         Group {
             Form {
                 ProfilePhotoSettings(photos: call.profilePhoto, disabled: call.busy || lobby.waiting)
+                Section("Missed calls") {
+                    BadgePermissionView(badge: call.callBadge)
+                    Text("Show the number of uncleared missed calls on the Canddle app icon.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Your device") {
                     Text(lobby.pushStatus).font(.caption).foregroundStyle(.secondary)
                     microphoneSettings

@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+                F80000000000000000000001 /* MissedCallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000002; };
+                F80000000000000000000003 /* MemberProfileCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000004; };
+                F80000000000000000000005 /* MissedCallsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000006; };
                 F70000000000000000000001 /* CallPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000002; };
                 F70000000000000000000003 /* CallStatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000004; };
                 F60000000000000000000003 /* CallBranding.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004; };
@@ -49,6 +52,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+                F80000000000000000000002 /* MissedCallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissedCallStore.swift; sourceTree = "<group>"; };
+                F80000000000000000000004 /* MemberProfileCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemberProfileCache.swift; sourceTree = "<group>"; };
+                F80000000000000000000006 /* MissedCallsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissedCallsView.swift; sourceTree = "<group>"; };
                 F70000000000000000000002 /* CallPhase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallPhase.swift; sourceTree = "<group>"; };
                 F70000000000000000000004 /* CallStatusCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallStatusCard.swift; sourceTree = "<group>"; };
                 F60000000000000000000004 /* CallBranding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallBranding.swift; sourceTree = "<group>"; };
@@ -116,6 +122,7 @@
 		A00000000000000000000020 /* App */ = {
 			isa = PBXGroup;
 			children = (
+                                F80000000000000000000006 /* MissedCallsView.swift */,
                                 F50000000000000000000006 /* ProfilePhotoStore.swift */,
                                 F50000000000000000000008 /* ProfilePhotoView.swift */,
                                 F20000000000000000000009 /* WebRTC-LICENSE.txt */,
@@ -141,6 +148,8 @@
 		A00000000000000000000021 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+                                F80000000000000000000002 /* MissedCallStore.swift */,
+                                F80000000000000000000004 /* MemberProfileCache.swift */,
                                 F50000000000000000000002 /* DeviceProfile.swift */,
                                 F50000000000000000000004 /* ProfileImage.swift */,
                                 F60000000000000000000002 /* CallAudio.swift */,
@@ -246,6 +255,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                                F80000000000000000000001 /* MissedCallStore.swift in Sources */,
+                                F80000000000000000000003 /* MemberProfileCache.swift in Sources */,
+                                F80000000000000000000005 /* MissedCallsView.swift in Sources */,
                                 F50000000000000000000001 /* DeviceProfile.swift in Sources */,
                                 F50000000000000000000003 /* ProfileImage.swift in Sources */,
                                 F60000000000000000000001 /* CallAudio.swift in Sources */,

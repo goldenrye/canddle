@@ -51,14 +51,20 @@ Open **Settings > Profile photo**:
 - Photos appear beside member names in the directory and active calls. Sharing
   requires an upgraded relay and receiving app; older versions retain icons.
   Updates are coalesced, so changing a photo can take about five seconds to appear.
+  Your own photo row is also shown while idle. Previously received member photos
+  remain visible during disconnects and when those members are offline.
 
 Photos are visible to the relay operator and other clients with access to that
 relay, not just verified family devices or current call participants. They are
 cosmetic metadata, not end-to-end-encrypted audio or identity verification.
 Sanitized contact/custom thumbnails are saved on this iPhone. The relay holds
 current profiles in memory while devices remain registered (including handoff
-grace); receiving apps keep a bounded in-memory cache until disconnect. Removing
-a photo cannot revoke a copy another person already saved.
+grace); receiving apps save up to 128 signed profiles for one relay locally.
+Signatures are rechecked on reload, and newer removal revisions prevent an older
+photo from returning on reconnect. A different relay never uses this cache.
+Forgetting the relay or verified peers clears received photos. Removing a photo
+cannot revoke a copy another person already saved; offline recipients learn the
+removal when they next receive the sender's updated profile.
 
 Native image/protocol/persistence checks:
 
@@ -72,6 +78,20 @@ xcrun swiftc -parse-as-library iphone/Core/*.swift \
 On a signed iPhone, verify selecting a contact with/without a photo, cancelling
 both pickers, choosing an iCloud photo, restoring the contact default, persistence
 after relaunch, and updating/removing the avatar on a second phone.
+
+### Missed Calls
+
+Enable **Settings > Missed calls > Enable missed-call icon badge** to show a red
+unread count on the Canddle app icon. The Calls page has an expandable missed-call
+list with **Clear missed calls**. Answered/declined calls and duplicate events do
+not add to the count. See [background calling](BACKGROUND_CALLS.md#missed-call-badge)
+for permission, persistence and delivery limitations.
+
+```sh
+xcrun swiftc -parse-as-library iphone/Core/*.swift \
+  iphone/Tests/MissedCallChecks.swift -o /tmp/canddle-missed-checks
+/tmp/canddle-missed-checks
+```
 
 ### Main Call Screen
 

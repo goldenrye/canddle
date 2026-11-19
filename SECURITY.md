@@ -504,14 +504,29 @@ Updates have an independent four-message burst / one-per-five-seconds refill;
 excess cosmetic updates are dropped rather than consuming call-control budgets.
 Unchanged profiles are not resent. Relay profile state lives on registered peers,
 is transferred by authenticated handoff, and disappears when registration ends.
-Received profiles are cached only in app memory until disconnect. Sanitized own
-contact/custom thumbnails and a revision are stored in local preferences.
+Received profiles persist in local preferences, bounded to 128 signed messages
+and 1.1 MB for one relay URL. Reload verifies signatures and retains the highest
+revision, including empty-photo removal tombstones. Another relay cannot reuse
+the cached images. Disconnect does not erase them; forgetting the relay or
+verified peers does. This preserves previously seen images, not freshness:
+withheld updates or a cleared/evicted cache still allow stale signed metadata.
+Sanitized own contact/custom thumbnails and a revision are also stored in local
+preferences. These cosmetic records may be included in device backups.
 
 Photos are intentionally visible to the relay operator and all subscribed clients
 on that relay, including unverified devices. They are not E2EE, admission evidence,
 or permission to call. Removing a photo updates connected recipients but cannot
 erase copies they saved. Privacy disclosures for distribution must reflect this
 optional sharing; see [Profile Photos](iphone/README.md#profile-photos).
+
+The iPhone's missed-call journal stores at most 128 observed authenticated incoming
+calls in local preferences (relay URL, call ID, caller public key/name, timestamp,
+group flag and outcome). It contains no audio or bearer credentials and may appear
+in device backups. Badge permission is separate from PushKit provisioning.
+Answer/decline suppress a miss; a mere socket failure is not evidence of a missed
+call. Clear marks entries reviewed while retaining bounded deduplication receipts;
+forgetting the saved relay erases them. This is local UI history, not a signed audit
+trail or a guarantee of delivery. See [missed-call behavior](iphone/BACKGROUND_CALLS.md#missed-call-badge).
 
 Optional APNs VoIP delivery and CallKit provide background/lock-screen ringing.
 Apple receives signed public offer metadata, relay URL, recipient public key and

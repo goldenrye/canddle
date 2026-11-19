@@ -101,6 +101,40 @@ Old clients continue to work with the upgraded relay.
 
 ## Storage and Privacy
 
+### Missed-Call Badge
+
+In Canddle **Settings > Missed calls**, tap **Enable missed-call icon badge** and
+allow access. This requests badge permission only, not notification sounds or
+banners. If already denied, enable **Badges** in iPhone notification settings.
+Uncleared missed calls show a native red number on the existing Canddle icon,
+not the Phone icon. Expand **Missed calls** on the Calls page and tap
+**Clear missed calls** to remove the count; simply opening the app does not clear it.
+
+Authenticated incoming group and individual invitations are recorded when observed.
+An unanswered ringing timeout or a relay-reported call closure marks them missed.
+Valid pushes explicitly filtered by CallKit's Do Not Disturb policy also count;
+blocked, invalid and other failed CallKit reports do not.
+Explicit Answer, in-app Join, and Decline do not count as missed, even if subsequent
+verification or audio setup fails. Push/socket duplicates and repeated closures
+are deduplicated by relay and call ID within a bounded 128-entry journal.
+Connection loss alone and process relaunch are not treated as proof of a missed call.
+
+The journal persists locally in preferences and contains relay URL, call ID,
+caller public key/name, group flag, timestamp and outcome, but no audio or credentials.
+Clearing retains deduplication receipts; **Forget saved relay** erases the journal
+and badge count. Entries can appear in device backups; they are not Keychain secrets.
+Calls never delivered to the app cannot be recovered as missed calls. APNs,
+force-quit, Focus and OS background limits still apply. No relay upgrade beyond
+the existing calling/profile support is required for these client-side changes.
+
+On a provisioned iPhone, enable badges, lock the receiver and let a call time out;
+check the Canddle icon count. Repeat with caller cancellation, Answer, Decline,
+duplicate delivery, relaunch, denied badge permission, and clearing from the app.
+After clearing, verify the badge does not return when reopening the app or
+returning from notification settings.
+
+### Credentials
+
 Relay credentials, imported public CA certificates, device identity and verified
 peer keys use device-only Keychain storage accessible **after the first unlock**.
 Existing items migrate on load. This is a deliberate change from unlocked-only
