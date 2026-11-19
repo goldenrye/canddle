@@ -10,6 +10,12 @@ import Foundation
         check(.init(), .offline)
         check(.init(relayConnecting: true), .relayConnecting)
         check(.init(online: true), .ready)
+        check(.init(online: true, incoming: true), .incoming)
+        check(.init(pairing: true, incoming: true), .pairing)
+        check(.init(admitted: true, incoming: true), .audioConnecting)
+        check(.init(calling: true, incoming: true), .calling)
+        check(.init(incoming: true, joining: true), .verifyCaller)
+        check(.init(recovering: true, incoming: true), .recovering)
         check(.init(online: true, pairing: true, audioBusy: true), .pairing)
         // Being online must never mask a pending call.
         check(.init(online: true, calling: true), .calling)
@@ -30,6 +36,7 @@ import Foundation
         check(.init(audioBusy: true, audioConnected: true), .connected)
         check(.init(online: true), .ready) // Hangup clears the call presentation.
         precondition(CallPhase.calling.stage == 0)
+        precondition(CallPhase.incoming.stage == 0 && CallPhase.incoming.needsAction)
         precondition(CallPhase.verifyCaller.stage == 1)
         precondition(CallPhase.approvalNeeded.needsAction && CallPhase.verifyCaller.needsAction)
         precondition(!CallPhase.waitingApproval.needsAction && !CallPhase.peerVerification.needsAction)

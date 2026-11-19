@@ -143,7 +143,8 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
             let key = try Curve25519.Signing.PrivateKey(rawRepresentation: identity.secret)
             let recipient = VoiceProtocol.base64(key.publicKey.rawRepresentation)
             let offer = try IncomingCallPush(payload, scope: scope, recipient: recipient).offer
-            return (offer, scope, identity.trusted[scope + "|" + offer.identity] ?? "Unverified Canddle caller")
+            let verified = identity.trusted[scope + "|" + offer.identity] != nil
+            return (offer, scope, offer.callerDisplayName(verified: verified))
         } catch { return nil }
     }
 

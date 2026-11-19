@@ -139,7 +139,7 @@ final class CallStore: ObservableObject {
         lobby.onIncomingCall = { [weak self] offer in
             guard let self else { return }
             self.missedCalls.receive(offer, scope: self.lobby.relayScope,
-                name: self.lobby.trustedName(offer.identity) ?? offer.name)
+                name: offer.callerDisplayName(verified: self.lobby.trustedName(offer.identity) != nil))
         }
         lobby.onIncomingHandled = { [weak self] call in
             guard let self else { return }

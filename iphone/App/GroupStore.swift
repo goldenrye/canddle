@@ -129,12 +129,18 @@ final class GroupStore: ObservableObject {
     var visibleCandidates: [LobbyCandidate] { candidates.filter { !ignored.contains($0.id) } }
     func trustedName(_ key: String) -> String? { trusted[scope + "|" + key] }
 
+    var incomingOffer: LobbyOffer? {
+        guard online, !waiting else { return nil }
+        return offers.first { $0.target != nil } ?? offers.first
+    }
+
     func callPhase(configured: Bool = true, audioBusy: Bool = false,
                    audioConnected: Bool = false, pairing: Bool = false) -> CallPhase {
         CallPhase.resolve(.init(configured: configured, online: online,
             relayConnecting: active && !online, pairing: pairing, audioBusy: audioBusy,
             audioConnected: audioConnected, admitted: inCall, recovering: recoveringMedia,
-            calling: ownOffer != nil, joining: joining != nil, confirmed: confirmed,
+            calling: ownOffer != nil, incoming: incomingOffer != nil,
+            joining: joining != nil, confirmed: confirmed,
             requests: visibleCandidates.count,
             confirmedRequests: visibleCandidates.filter(\.confirmed).count,
             approving: approving != nil))

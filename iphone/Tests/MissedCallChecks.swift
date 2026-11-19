@@ -15,6 +15,13 @@ import Foundation
                                   target: group ? nil : recipient)
         }
         let first = try offer()
+        precondition(first.callerDisplayName(verified: true) == "Family")
+        precondition(first.callerDisplayName(verified: false) == "Family (unverified)")
+        let renamed = try LobbyOffer.create(identity: caller, name: "Alice", ephemeral: .init(),
+                                            target: recipient)
+        precondition(renamed.identity == first.identity)
+        precondition(renamed.callerDisplayName(verified: true) == "Alice",
+                     "A previously verified key must display its latest signed name")
         var changes = 0
         store.onChange = { changes += 1 }
         store.receive(first, scope: scope, name: first.name)

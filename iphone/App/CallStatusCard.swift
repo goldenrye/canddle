@@ -14,7 +14,15 @@ struct CallStatusCard: View {
         phase.needsAction || phase == .recovering ? .orange : .teal
     }
 
+    private var displayedCaller: LobbyOffer? {
+        if let joining = lobby.joining, !lobby.inCall { return joining.offer }
+        return phase == .incoming ? lobby.incomingOffer : nil
+    }
+
     private var context: String {
+        if let offer = displayedCaller {
+            return offer.callerDisplayName(verified: lobby.trustedName(offer.identity) != nil)
+        }
         guard phase.isCall else { return "You: \(lobby.name)" }
         if let target = lobby.ownOffer?.target {
             return lobby.groupDirectory.first { $0.id == target }?.name
@@ -26,16 +34,24 @@ struct CallStatusCard: View {
     }
 
     private var title: String {
-        phase == .calling && !lobby.isIndividual ? "Waiting for members" : phase.title
+        if phase == .incoming, displayedCaller?.target == nil { return "Group call invitation" }
+        return phase == .calling && !lobby.isIndividual ? "Waiting for members" : phase.title
     }
 
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 12) {
-                    Image("BrandLogo").resizable().scaledToFit()
-                        .frame(width: 44, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Group {
+                        if let offer = displayedCaller {
+                            ProfilePhotoCircle(
+                                data: lobby.memberPhoto(offer.identity, in: lobby.relayScope), size: 44)
+                        } else {
+                            Image("BrandLogo").resizable().scaledToFit()
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
                         .overlay(alignment: .bottomTrailing) {
                             if phase.isCall {
                                 Image(systemName: phase.symbol)
@@ -71,7 +87,12 @@ struct CallStatusCard: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(stage == 3 ? "Invitation, approval and audio connected"
                         : "Call progress: \(["Invitation", "Approval", "Audio connection"][stage])")
-                    if phase == .calling {
+                    if phase == .incoming {
+                        Text(displayedCaller?.target == nil
+                             ? "Join the group invitation below. The caller's name and photo do not replace device verification."
+                             : "Answer or decline below. The caller's name and photo do not replace device verification.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if phase == .calling {
                         Text(lobby.isIndividual
                              ? "Calling this member only. A dialing tone does not confirm their phone is ringing."
                              : "Members can request to join. Review their requests below before audio starts.")

@@ -48,6 +48,11 @@ struct LobbyOffer: Identifiable {
     var name: String { message["name"]! }
     var target: String? { message["target"] }
     var usesWebRTC: Bool { message["media"] == "webrtc" }
+    func callerDisplayName(verified: Bool) -> String {
+        // The signed offer carries the current name; verification still belongs to the device key.
+        verified ? name : "\(name) (unverified)"
+    }
+
     var fields: [String] {
         [id, identity, ephemeral, name] + (target.map { [$0] } ?? [])
             + (message["media"].map { [$0] } ?? [])

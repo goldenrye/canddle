@@ -81,6 +81,13 @@ Old clients continue to work with the upgraded relay.
   and persists valid incoming state before CallKit actions or PushKit completion.
   Invalid/stale calls are ended. No cancellation or generic notification pushes
   are sent as VoIP pushes.
+- Incoming names come from the current signed offer, not an old saved verification
+  label such as "My iPhone". Unknown device keys are explicitly marked unverified;
+  showing a name does not verify a person or bypass admission.
+  Inside Canddle, the incoming heading shows the caller and cached photo before
+  Answer, with private invitations ahead of group invitations. CallKit accepts
+  a caller name but provides no custom per-caller photo field; its system image
+  presentation is controlled by iOS. Set a recognizable device name in Settings.
 - Answer requests admission for a previously verified caller. The caller
   accepts manually by default. The optional **Auto-accept verified family devices**
   setting permits automatic admission only for devices already verified by the

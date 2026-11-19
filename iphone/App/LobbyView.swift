@@ -268,8 +268,9 @@ struct LobbyView: View {
     private func peer(_ identity: String, name: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let saved = lobby.trustedName(identity) {
-                Label("Verified device: \(saved)", systemImage: "checkmark.shield.fill")
-                if name != saved { Text("Current name: \(name)").font(.caption) }
+                Label(name, systemImage: "checkmark.shield.fill").font(.headline)
+                Text("Previously verified device key").font(.caption).foregroundStyle(.secondary)
+                if name != saved { Text("Verified originally as: \(saved)").font(.caption) }
             } else {
                 Label("Unverified: \(name)", systemImage: "person.crop.circle.badge.questionmark")
             }

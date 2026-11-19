@@ -125,6 +125,46 @@ struct GroupChecks {
             precondition(!clients[1].active)
             defer { clients.forEach { $0.disconnect() } }
             let host = clients[0]
+            if input.mode == "incoming-identity" {
+                let guest = clients[1], other = clients[2]
+                let hostID = VoiceProtocol.base64(
+                    try Curve25519.Signing.PrivateKey(rawRepresentation: saved[0].secret).publicKey.rawRepresentation)
+                saved[1].trusted[settings.url.absoluteString + "|" + hostID] = "My iPhone"
+                host.name = "Alice"
+                guest.name = "My iPhone"
+                let photo = try Self.photo(gray: 0.4)
+                host.updateProfile(photo: photo, revision: 1)
+                for device in [host, guest, other] { device.connect(settings) }
+                try await wait { [host, guest, other].allSatisfy(\.online) && guest.profiles[hostID] != nil }
+                host.announce()
+                try await wait { guest.offers.count == 1 && !host.sending }
+                precondition(guest.callPhase() == .incoming && guest.joining == nil)
+                let incoming = guest.incomingOffer!
+                precondition(incoming.identity == hostID && incoming.name == "Alice")
+                precondition(guest.trustedName(hostID) == "My iPhone")
+                precondition(incoming.callerDisplayName(verified: guest.trustedName(hostID) != nil) == "Alice")
+                precondition(guest.memberPhoto(incoming.identity, in: guest.relayScope) == photo)
+                other.announce(target: guest.ownIdentity)
+                try await wait { guest.offers.count == 2 && !other.sending }
+                let direct = guest.incomingOffer!
+                precondition(direct.identity == other.ownIdentity && direct.target == guest.ownIdentity,
+                             "Private invitations take precedence over open group invitations")
+                precondition(direct.callerDisplayName(verified: guest.trustedName(direct.identity) != nil)
+                             == "\(other.name) (unverified)")
+                guest.request(direct)
+                try await wait { !guest.sending && other.candidates.count == 1 }
+                precondition(guest.incomingOffer == nil && guest.callPhase() == .verifyCaller)
+                precondition(!guest.confirmed, "Displaying a caller must not verify or accept the device")
+                guest.cancelRequest()
+                try await wait { !guest.waiting && !other.waiting && guest.offers.count == 1 }
+                precondition(guest.incomingOffer?.identity == hostID && guest.callPhase() == .incoming)
+                host.cancelRequest()
+                try await wait { guest.offers.isEmpty }
+                precondition(guest.incomingOffer == nil && guest.callPhase() == .ready)
+                precondition(guest.trustedName(hostID) == "My iPhone")
+                print("PASS group incoming-identity")
+                return
+            }
             if input.mode == "quiet-presence" {
                 var presenceUpdates = 0
                 var nameUpdates = 0

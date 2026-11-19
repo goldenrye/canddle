@@ -30,6 +30,7 @@ TOKEN = "group-test-" + "a" * 40
         "legacy-presence",
         "rename-directory",
         "quiet-presence",
+        "incoming-identity",
         "auto-enabled",
         "auto-disabled",
         "auto-unverified",
