@@ -73,6 +73,32 @@ On a signed iPhone, verify selecting a contact with/without a photo, cancelling
 both pickers, choosing an iCloud photo, restoring the contact default, persistence
 after relaunch, and updating/removing the avatar on a second phone.
 
+### Main Call Screen
+
+The top card describes the current call rather than just relay presence. It
+distinguishes waiting for an answer/member, a received join request awaiting
+identity confirmation, your approval, the caller's acceptance, audio setup, an
+established call, and network recovery. Invite / Approval / Audio stages are
+shown during setup. Signed roster admission alone never displays "Call connected."
+The store's latest status remains visible so errors are not hidden by the summary.
+
+Incoming invitations appear before the member directory; targeted calls are
+listed before open group calls. Approval requests appear before participants.
+The idle directory lists other devices, with your name in the top card, followed
+by Start group call. During calls, unrelated members are collapsed and the
+participants list appears only after admission. Cancellation and audio controls
+stay at the bottom; activity notices scroll with the page instead of covering it.
+
+Per-peer Direct/TURN and quality badges remain visible, with a compact layout
+that wraps on narrow screens. Detailed statistics and the aggregate report are
+expandable; the Local Network permission warning remains visible when relevant.
+There is no UI polling timer. Phase changes are announced to VoiceOver, and
+quality updates still target only their dedicated badge views.
+
+`Tests/CallPhaseChecks.swift` checks presentation-state priority. The native
+`ringback` group scenario also checks actual request, verification, approval,
+admission and hangup transitions against a local relay.
+
 ### Dialing and Speaker
 
 Incoming and outgoing system calls supply a transparent, monochrome Canddle
@@ -514,6 +540,10 @@ Build and simulator tests do not verify real microphone/speaker quality. Before
 relying on this client, run iPhone-to-desktop and iPhone-to-iPhone calls and check:
 
 - Both audio directions, echo, volume, latency, and a ten-minute call.
+- Small-screen and large-text layouts: incoming invites before the directory,
+  visible approval actions, non-overlapping bottom controls, and expandable
+  participant statistics. Check waiting, first-time verification, audio setup,
+  active call, additional join requests and network-recovery presentation.
 - Built-in audio, wired headphones, and Bluetooth HFP.
 - Outgoing ringback before acceptance, including cancel/decline/timeout and lock
   screen. Answer quickly to check activation/admission ordering; no tone should

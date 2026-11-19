@@ -9,6 +9,7 @@ struct LobbyView: View {
 
     var body: some View {
         if !lobby.waiting && !callBusy {
+            incomingCalls
             memberDirectory
             Section {
                 Button(action: startCall) {
@@ -22,11 +23,7 @@ struct LobbyView: View {
                 .accessibilityIdentifier("lobbyAnnounce")
                 .disabled(lobby.sending || (lobby.active && !lobby.online))
             } footer: {
-                Text(lobby.preferWebRTC
-                     ? (lobby.online && !lobby.webRTCSupported
-                        ? "WebRTC is unavailable on this relay. You can start a legacy call."
-                        : "WebRTC audio. Only updated apps can join.")
-                     : "Legacy audio over TCP. Compatible with older apps.")
+                Text("Call the group together, or use a member's phone button for a private call.")
             }
             .confirmationDialog("WebRTC is unavailable on this relay", isPresented: Binding(
                 get: { lobby.pendingLegacyCall != nil },
@@ -41,31 +38,10 @@ struct LobbyView: View {
                      + "the same, but audio may still be choppy. Your WebRTC setting will stay on. "
                      + "To use WebRTC, configure TURN on the relay.")
             }
-            if lobby.online && !lobby.offers.isEmpty {
-                Section("Available calls") {
-                    ForEach(lobby.offers) { offer in
-                        VStack(alignment: .leading, spacing: 8) {
-                            peer(offer.identity, name: offer.name)
-                            Text(offer.target == nil ? "Group call" : "Individual call")
-                                .font(.caption).foregroundStyle(.secondary)
-                            Text(offer.usesWebRTC ? "WebRTC / Opus" : "Legacy / TCP")
-                                .font(.caption).foregroundStyle(.secondary)
-                            HStack {
-                                Button(offer.target == nil ? "Join group call" : "Answer") { lobby.request(offer) }
-                                    .buttonStyle(.borderedProminent)
-                                if offer.target != nil {
-                                    Button("Decline", role: .destructive) { lobby.decline(offer) }
-                                        .buttonStyle(.bordered)
-                                }
-                            }.disabled(lobby.sending)
-                        }
-                    }
-                }
-            }
         }
         if lobby.ownOffer != nil {
             if !lobby.visibleCandidates.isEmpty {
-                Section("Join requests (\(lobby.visibleCandidates.count))") {
+                Section("Needs your attention (\(lobby.visibleCandidates.count))") {
                     ForEach(lobby.visibleCandidates) { candidate in
                         VStack(alignment: .leading, spacing: 10) {
                             peer(candidate.exchange.request.identity, name: candidate.exchange.request.name)
@@ -87,18 +63,6 @@ struct LobbyView: View {
                         }.padding(.vertical, 8)
                     }
                 }
-            } else if !lobby.inCall {
-                Section {
-                    if let target = lobby.ownOffer?.target {
-                        peer(target, name: lobby.groupDirectory.first { $0.id == target }?.name ?? "Selected device")
-                    }
-                    Label(lobby.isIndividual ? "Waiting for an answer" : "Waiting for join requests",
-                          systemImage: "person.badge.clock")
-                    Text(lobby.isIndividual
-                         ? "Only the selected device is invited. Both devices need an updated app."
-                         : "Your group call is visible to everyone online on this relay.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
             }
         }
         if let exchange = lobby.joining, !lobby.inCall {
@@ -114,7 +78,7 @@ struct LobbyView: View {
                 }
             }
         }
-        if !lobby.members.isEmpty {
+        if lobby.inCall && !lobby.members.isEmpty {
             Section("Participants (\(lobby.members.count)/\(lobby.memberLimit))") {
                 ForEach(lobby.members) { member in
                     DisclosureGroup {
@@ -140,7 +104,8 @@ struct LobbyView: View {
                                     CallMediaIndicator(quality: call.mediaQuality, connected: call.connected,
                                                        peer: member.id)
                                 } else {
-                                    Text(lobby.inCall ? "In call" : "Waiting for participants")
+                                    Text(call.muted ? "Microphone muted"
+                                         : (call.connected ? "Microphone on" : "Preparing audio"))
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -151,18 +116,91 @@ struct LobbyView: View {
                 }
             }
         }
-        if lobby.waiting || callBusy {
+        if (lobby.waiting || callBusy) && !directoryMembers.isEmpty {
             memberDirectory
+        }
+    }
+
+    @ViewBuilder
+    private var incomingCalls: some View {
+        if lobby.online && !lobby.offers.isEmpty {
+            Section("Incoming calls") {
+                // Targeted invitations take precedence over open group calls.
+                ForEach(lobby.offers.filter { $0.target != nil } + lobby.offers.filter { $0.target == nil }) { offer in
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label(offer.target == nil ? "Group call invitation" : "Calling you",
+                              systemImage: offer.target == nil ? "person.2.fill" : "phone.arrow.down.left")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.teal)
+                        HStack(alignment: .top, spacing: 12) {
+                            MemberAvatar(identity: offer.identity, isYou: false, photos: call.profilePhoto,
+                                         remote: lobby.profiles[offer.identity]?.photo)
+                            peer(offer.identity, name: offer.name)
+                        }
+                        HStack {
+                            Button(offer.target == nil ? "Join group call" : "Answer") { lobby.request(offer) }
+                                .buttonStyle(.borderedProminent)
+                            if offer.target != nil {
+                                Button("Decline", role: .destructive) { lobby.decline(offer) }
+                                    .buttonStyle(.bordered)
+                            }
+                        }.disabled(lobby.sending)
+                    }
+                    .padding(.vertical, 6)
+                    .accessibilityIdentifier("incomingOffer-\(offer.id)")
+                }
+            }
+        }
+    }
+
+    private var directoryMembers: [GroupPresence] {
+        let occupied = Set(lobby.members.map(\.id))
+        return lobby.groupDirectory.filter {
+            $0.id != lobby.localIdentity && (!(lobby.waiting || callBusy)
+                || (!occupied.contains($0.id) && $0.id != lobby.ownOffer?.target
+                    && $0.id != lobby.joining?.offer.identity))
         }
     }
 
     private var memberDirectory: some View {
         Section {
-            if lobby.groupDirectory.isEmpty {
-                Text("Members appear when devices connect to this relay.")
+            if lobby.waiting || callBusy {
+                DisclosureGroup("Other group members (\(directoryMembers.count))") { directoryRows }
+                    .accessibilityIdentifier("otherGroupMembers")
+            } else {
+                directoryRows
+            }
+        } header: {
+            if !lobby.waiting && !callBusy {
+                Text("Group members (\(directoryMembers.count))")
+                    .accessibilityIdentifier("groupMembersHeader")
+            }
+        } footer: {
+            if !lobby.waiting && !callBusy {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !lobby.online {
+                        Text("Connect to refresh member statuses.")
+                    } else if !lobby.directCallsSupported {
+                        Text("Upgrade the relay to enable individual call icons.")
+                    } else if !lobby.presenceSupported {
+                        Text("Upgrade the relay to see live member statuses.")
+                    } else if !lobby.presenceReady {
+                        Text("Loading member statuses...")
+                    } else if lobby.presenceTruncated {
+                        Text("Only the first 32 connected devices are shown. Other statuses are unknown.")
+                    }
+                    Text("Status is relay-reported; offline members may still receive calls through Apple push.")
+                }
+            }
+        }
+    }
+
+    private var directoryRows: some View {
+        Group {
+            if directoryMembers.isEmpty {
+                Text("No other members yet. Connect another device to the same relay to see it here.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(lobby.groupDirectory) { member in
+            ForEach(directoryMembers) { member in
                 HStack(alignment: .top, spacing: 12) {
                     MemberAvatar(identity: member.id, isYou: member.id == lobby.localIdentity,
                                  photos: call.profilePhoto, remote: lobby.profiles[member.id]?.photo)
@@ -212,25 +250,6 @@ struct LobbyView: View {
                 }
                 .padding(.vertical, 6)
                 .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] + 56 }
-            }
-        } header: {
-            Text("Group members (\(lobby.groupDirectory.count))")
-                .accessibilityIdentifier("groupMembersHeader")
-        } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                if !lobby.online {
-                    Text("Connect to refresh member statuses.")
-                } else if !lobby.directCallsSupported {
-                    Text("Upgrade the relay to enable individual call icons.")
-                } else if !lobby.presenceSupported {
-                    Text("Upgrade the relay to see live member statuses.")
-                } else if !lobby.presenceReady {
-                    Text("Loading member statuses...")
-                } else if lobby.presenceTruncated {
-                    Text("Only the first 32 connected devices are shown. Other statuses are unknown.")
-                }
-                Text("Tap a phone icon to call one device. Status is relay-reported; "
-                     + "offline devices may still ring through Apple push.")
             }
         }
     }
@@ -331,16 +350,22 @@ struct CallMediaIndicator: View {
                     Text("Measurements arrive about every 10 seconds after a roughly 20-second warm-up. Stale means no fresh report for 25 seconds.")
                 }
             } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 10) {
-                        Label(indicator.transport, systemImage: "arrow.up.arrow.down")
-                        if let path {
-                            Label(path.rawValue, systemImage: path.symbol)
-                                .help(path.description)
-                                .accessibilityIdentifier("mediaPath-\(peer ?? "")")
+                Group {
+                    if let peer, quality.snapshot.webRTC, !quality.snapshot.connected.contains(peer) {
+                        Label("Connecting audio", systemImage: "waveform")
+                            .foregroundStyle(.orange)
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                transportBadge(indicator, path: path)
+                                qualityBadge(indicator)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                transportBadge(indicator, path: path)
+                                qualityBadge(indicator)
+                            }
                         }
                     }
-                    qualityBadge(indicator)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel((path.map { "Audio path: \($0.description). " } ?? "")
@@ -351,6 +376,17 @@ struct CallMediaIndicator: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .transaction { $0.animation = nil }
+    }
+
+    private func transportBadge(_ indicator: CallQualityIndicator, path: CallQualityStore.MediaPath?) -> some View {
+        HStack(spacing: 10) {
+            Label(indicator.transport, systemImage: "arrow.up.arrow.down")
+            if let path {
+                Label(path.rawValue, systemImage: path.symbol)
+                    .help(path.description)
+                    .accessibilityIdentifier("mediaPath-\(peer ?? "")")
+            }
+        }
     }
 
     private func qualityBadge(_ indicator: CallQualityIndicator) -> some View {

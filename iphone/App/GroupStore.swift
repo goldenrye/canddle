@@ -118,6 +118,17 @@ final class GroupStore: ObservableObject {
     var visibleCandidates: [LobbyCandidate] { candidates.filter { !ignored.contains($0.id) } }
     func trustedName(_ key: String) -> String? { trusted[scope + "|" + key] }
 
+    func callPhase(configured: Bool = true, audioBusy: Bool = false,
+                   audioConnected: Bool = false, pairing: Bool = false) -> CallPhase {
+        CallPhase.resolve(.init(configured: configured, online: online,
+            relayConnecting: active && !online, pairing: pairing, audioBusy: audioBusy,
+            audioConnected: audioConnected, admitted: inCall, recovering: recoveringMedia,
+            calling: ownOffer != nil, joining: joining != nil, confirmed: confirmed,
+            requests: visibleCandidates.count,
+            confirmedRequests: visibleCandidates.filter(\.confirmed).count,
+            approving: approving != nil))
+    }
+
     func updateProfile(photo: Data, revision: UInt64) {
         guard DeviceProfile.validPhoto(photo), revision > profileRevision else { return }
         profilePhoto = photo

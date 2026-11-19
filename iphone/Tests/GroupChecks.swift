@@ -150,12 +150,17 @@ struct GroupChecks {
                 var calls = 0, admissions = 0, closed = 0
                 host.onOutgoingCall = { offer in
                     precondition(host.ownOffer?.id == offer.id && !host.inCall)
+                    precondition(host.callPhase() == .calling)
                     calls += 1
                     output.start(admitted: false)
                     precondition(!output.shouldPlayRingback)
                     output.activate()
                 }
-                host.onAudioReady = { admissions += 1; output.admit() }
+                host.onAudioReady = {
+                    precondition(host.callPhase() == .audioConnecting)
+                    admissions += 1
+                    output.admit()
+                }
                 host.onCallClosed = { _ in closed += 1; output.reset() }
                 host.connect(settings)
                 guest.connect(settings)
@@ -176,14 +181,22 @@ struct GroupChecks {
                 try await wait { guest.offers.count == 1 && !host.sending }
                 guest.request(guest.offers[0])
                 try await wait { host.candidates.count == 1 && !guest.sending }
+                precondition(guest.callPhase() == .verifyCaller)
+                precondition(host.callPhase() == .peerVerification)
                 guest.confirmCaller()
                 try await wait { host.candidates[0].confirmed && !guest.sending }
+                precondition(guest.callPhase() == .waitingApproval)
+                precondition(host.callPhase() == .approvalNeeded)
                 host.approve(host.candidates[0])
+                precondition(host.callPhase() == .approving)
                 try await wait { host.inCall && guest.inCall }
+                precondition(host.callPhase() == .audioConnecting && guest.callPhase() == .audioConnecting)
+                precondition(host.callPhase(audioBusy: true, audioConnected: true) == .connected)
                 precondition(calls == 3 && admissions == 1 && !output.shouldPlayRingback)
                 precondition(output.connect() && !output.connect())
                 host.cancelRequest()
                 try await wait { !host.inCall && !guest.inCall }
+                precondition(host.callPhase() == .ready && guest.callPhase() == .ready)
                 precondition(!output.shouldPlayRingback)
                 print("PASS group \(input.mode)")
                 return

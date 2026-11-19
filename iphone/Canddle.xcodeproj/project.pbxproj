@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+                F70000000000000000000001 /* CallPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000002; };
+                F70000000000000000000003 /* CallStatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000004; };
                 F60000000000000000000003 /* CallBranding.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004; };
                 F60000000000000000000001 /* CallAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000002; };
                 F50000000000000000000001 /* DeviceProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000002; };
@@ -47,6 +49,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+                F70000000000000000000002 /* CallPhase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallPhase.swift; sourceTree = "<group>"; };
+                F70000000000000000000004 /* CallStatusCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallStatusCard.swift; sourceTree = "<group>"; };
                 F60000000000000000000004 /* CallBranding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallBranding.swift; sourceTree = "<group>"; };
                 F60000000000000000000002 /* CallAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudio.swift; sourceTree = "<group>"; };
                 F50000000000000000000002 /* DeviceProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceProfile.swift; sourceTree = "<group>"; };
@@ -119,6 +123,7 @@
                                 F40000000000000000000002 /* WebRTCTrack.swift */,
                                 F40000000000000000000004 /* LocalNetworkAccess.swift */,
                                 F30000000000000000000002 /* CallQualityStore.swift */,
+                                F70000000000000000000004 /* CallStatusCard.swift */,
 				F10000000000000000000002 /* SystemCalls.swift */,
 				F00000000000000000000004 /* GroupStore.swift */,
 				E00000000000000000000005 /* LobbyStore.swift */,
@@ -140,6 +145,7 @@
                                 F50000000000000000000004 /* ProfileImage.swift */,
                                 F60000000000000000000002 /* CallAudio.swift */,
                                 F60000000000000000000004 /* CallBranding.swift */,
+                                F70000000000000000000002 /* CallPhase.swift */,
                                 F20000000000000000000007 /* WebRTCProtocol.swift */,
 				F00000000000000000000003 /* GroupProtocol.swift */,
 				E00000000000000000000004 /* LobbyProtocol.swift */,
@@ -244,6 +250,8 @@
                                 F50000000000000000000003 /* ProfileImage.swift in Sources */,
                                 F60000000000000000000001 /* CallAudio.swift in Sources */,
                                 F60000000000000000000003 /* CallBranding.swift in Sources */,
+                                F70000000000000000000001 /* CallPhase.swift in Sources */,
+                                F70000000000000000000003 /* CallStatusCard.swift in Sources */,
                                 F50000000000000000000005 /* ProfilePhotoStore.swift in Sources */,
                                 F50000000000000000000007 /* ProfilePhotoView.swift in Sources */,
                                 F20000000000000000000004 /* WebRTCAudio.swift in Sources */,

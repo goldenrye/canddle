@@ -49,41 +49,21 @@ struct CallView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    HStack(alignment: .top, spacing: 14) {
-                        Image("BrandLogo").resizable().scaledToFit()
-                            .frame(width: 48, height: 48)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(call.connected ? "Encrypted call" : (lobby.online ? "You're online" : "Private group calls"))
-                                .font(.title3.weight(.semibold))
-                            Text(call.busy ? call.status : lobby.status)
-                                .font(.subheadline).foregroundStyle(.secondary)
-                                .accessibilityIdentifier("lobbyStatus")
-                            if call.busy && !call.pairing {
-                                CallMediaIndicator(quality: call.mediaQuality, connected: call.connected)
-                                    .accessibilityHint("Group quality reflects the worst measured link. Expand a participant for details.")
-                                LocalNetworkHint(access: call.localNetwork)
-                            }
+                CallStatusCard(call: call, lobby: lobby, configured: configured)
+                if let notification = lobby.notification {
+                    HStack(spacing: 8) {
+                        Label(notification, systemImage: "info.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        Button(action: lobby.dismissNotification) {
+                            Image(systemName: "xmark").font(.caption)
+                                .frame(width: 44, height: 44)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        ZStack {
-                            if (call.busy && !call.connected) || (lobby.active && !lobby.online) {
-                                ProgressView().accessibilityLabel("Connecting")
-                            } else {
-                                Image(systemName: call.connected ? "lock.shield.fill" : "circle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(lobby.online || call.connected ? Color.teal : .secondary)
-                                    .accessibilityHidden(true)
-                            }
-                        }
-                        .frame(width: 20, height: 24)
-                    }.padding(.vertical, 12)
-                        .listRowBackground(
-                            LinearGradient(colors: [Color(.secondarySystemGroupedBackground), .teal.opacity(0.08)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
-                        )
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Dismiss notification")
+                    }
+                    .listRowBackground(Color.clear)
+                    .accessibilityIdentifier("incomingCallBanner")
                 }
                 if !configured {
                     Section {
@@ -104,6 +84,7 @@ struct CallView: View {
             .listStyle(.insetGrouped)
             .tint(.teal)
             .navigationTitle(lobby.waiting || (call.busy && !call.pairing) ? "Canddle call" : "Calls")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink {
@@ -132,8 +113,6 @@ struct CallView: View {
                             .accessibilityHint(call.speakerEnabled
                                 ? "Switch to the earpiece or connected headset"
                                 : "Switch to the loudspeaker")
-                        } else {
-                            Spacer()
                         }
                         Button(role: .destructive) {
                             if call.busy { call.hangUp() }
@@ -149,18 +128,6 @@ struct CallView: View {
                     .labelStyle(CallControlLabelStyle())
                     .buttonStyle(.bordered).controlSize(.large)
                     .padding().background(.regularMaterial)
-                }
-            }
-            .safeAreaInset(edge: .top) {
-                if let notification = lobby.notification {
-                    HStack {
-                        Label(notification, systemImage: "bell.badge.fill").font(.callout)
-                        Spacer()
-                        Button(action: lobby.dismissNotification) {
-                            Image(systemName: "xmark")
-                        }.accessibilityLabel("Dismiss notification")
-                    }.padding().background(.regularMaterial)
-                        .accessibilityIdentifier("incomingCallBanner")
                 }
             }
             .onChange(of: lobby.notificationID) { _ in
