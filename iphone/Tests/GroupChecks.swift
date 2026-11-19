@@ -204,6 +204,71 @@ struct GroupChecks {
                 print("PASS group \(input.mode)")
                 return
             }
+            if input.mode.hasPrefix("callback") {
+                let guest = clients[1], outsider = clients[2]
+                let scope = settings.url.absoluteString
+                let history = MissedCallStore(defaults: defaults[1])
+                guest.onIncomingCall = { history.receive($0, scope: scope, name: $0.name) }
+                guest.onCallClosed = { history.closed($0, scope: scope) }
+                host.connect(settings)
+                guest.connect(settings)
+                outsider.connect(settings)
+                try await wait { [host, guest, outsider].allSatisfy { $0.online && $0.presenceReady } }
+                host.announce()
+                try await wait { guest.offers.count == 1 && outsider.offers.count == 1 && !host.sending }
+                host.cancelRequest()
+                try await wait {
+                    history.count == 1 && !host.waiting && outsider.offers.isEmpty
+                        && guest.presence[host.ownIdentity]?.state == .online
+                }
+                let entry = history.missed[0]
+                precondition(entry.group, "The source invitation is a group call")
+                if input.mode == "callback-old" {
+                    precondition(!guest.directCallsSupported && !guest.canCallBack(entry, in: scope))
+                    guest.callBack(entry, in: scope)
+                    precondition(guest.ownOffer == nil)
+                    print("PASS group \(input.mode)")
+                    return
+                }
+                precondition(guest.canCallBack(entry, in: scope))
+                precondition(!guest.canCallBack(entry, in: "wss://another.example/relay"))
+                for (caller, relay) in [(entry.caller, "wss://another.example/relay"),
+                                        (guest.ownIdentity, scope), ("invalid", scope)] {
+                    let invalid = MissedCallStore.Entry(scope: relay, call: entry.call,
+                        caller: caller, name: entry.name, group: true,
+                        date: entry.date, outcome: .missed)
+                    precondition(!guest.canCallBack(invalid, in: scope))
+                    guest.callBack(invalid, in: scope)
+                    precondition(guest.ownOffer == nil)
+                }
+                var reviewed = entry
+                reviewed.outcome = .reviewed
+                precondition(!guest.canCallBack(reviewed, in: scope))
+                host.announce()
+                try await wait { guest.presence[host.ownIdentity]?.state == .calling && !host.sending }
+                precondition(!guest.canCallBack(entry, in: scope))
+                host.cancelRequest()
+                try await wait { !host.waiting && guest.presence[host.ownIdentity]?.state == .online }
+                let hostID = host.ownIdentity
+                host.disconnect()
+                try await wait { guest.presence[hostID] == nil && outsider.offers.isEmpty }
+                precondition(guest.canCallBack(entry, in: scope), "Offline callers may receive a push")
+                let unread = history.count
+                guest.callBack(entry, in: scope)
+                let callback = guest.ownOffer!
+                precondition(callback.target == hostID && callback.id != entry.call)
+                precondition(!guest.canCallBack(entry, in: scope))
+                guest.callBack(entry, in: scope)
+                precondition(guest.ownOffer?.id == callback.id, "Double tap must not create another call")
+                host.connect(settings)
+                try await wait { host.online && host.offers.contains { $0.id == callback.id } }
+                precondition(outsider.offers.isEmpty, "Callback must be private, even for a missed group call")
+                precondition(history.count == unread && guest.trusted.isEmpty && host.trusted.isEmpty)
+                guest.disconnect()
+                precondition(!guest.canCallBack(entry, in: scope))
+                print("PASS group \(input.mode)")
+                return
+            }
             if input.mode.hasPrefix("missed-") {
                 let guest = clients[1]
                 let history = MissedCallStore(defaults: defaults[1])

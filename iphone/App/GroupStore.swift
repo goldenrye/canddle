@@ -520,6 +520,22 @@ final class GroupStore: ObservableObject {
         announce(target: target, webRTC: preferWebRTC)
     }
 
+    func canCallBack(_ entry: MissedCallStore.Entry, in relayScope: String) -> Bool {
+        guard online, !waiting, !inCall, !sending, directCallsSupported,
+              entry.outcome == .missed, entry.scope == scope, relayScope == scope,
+              entry.caller != ownIdentity,
+              (try? VoiceProtocol.decode(entry.caller, size: 32)) != nil else { return false }
+        if let state = presence[entry.caller]?.state,
+           [.calling, .joining, .inCall].contains(state) { return false }
+        return true
+    }
+
+    func callBack(_ entry: MissedCallStore.Entry, in relayScope: String) {
+        guard canCallBack(entry, in: relayScope) else { return }
+        // A missed group invitation still calls its originator privately, never the old group.
+        announce(target: entry.caller)
+    }
+
     func dismissLegacyCallRequest() {
         pendingLegacyCall = nil
     }

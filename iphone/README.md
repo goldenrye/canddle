@@ -101,6 +101,11 @@ list with **Clear missed calls**. Answered/declined calls and duplicate events d
 not add to the count. Each entry shows the caller's cached photo, and the collapsed
 heading shows the latest caller's photo and name. Photos remain available offline;
 missing/removed photos or records from a different relay use a person icon.
+Tap the phone icon on a missed-call row to call that member back privately,
+including for a missed group invitation. You must be connected to the same relay
+and free to start a call; offline recipients may still receive an Apple push.
+Normal verification and approval still apply. Calling back keeps the history
+and badge until you use **Clear missed calls**.
 If badges are off, Calls offers the permission action
 directly; the in-app list still works without permission.
 Unanswered deadlines persist across suspension/relaunch, so losing the caller's

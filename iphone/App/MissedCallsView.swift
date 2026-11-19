@@ -82,6 +82,7 @@ struct MissedCallsSection: View {
     @ObservedObject var history: MissedCallStore
     @ObservedObject var badge: CallBadgeStore
     @ObservedObject var lobby: GroupStore
+    @ObservedObject var call: CallStore
 
     var body: some View {
         if history.count > 0 {
@@ -98,6 +99,18 @@ struct MissedCallsSection: View {
                             }
                             Spacer()
                             Text(entry.date, style: .relative).font(.caption).foregroundStyle(.secondary)
+                            Button { call.callBack(entry) } label: {
+                                Image(systemName: "phone.fill")
+                                    .font(.body.weight(.semibold))
+                                    .frame(width: 44, height: 44)
+                                    .background(.teal.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
+                            }
+                            .buttonStyle(.borderless)
+                            .tint(.teal)
+                            .accessibilityLabel("Call back \(entry.name)")
+                            .accessibilityHint("Start a private Canddle call to this caller.")
+                            .accessibilityIdentifier("callBack-\(entry.call)")
+                            .disabled(!call.canCallBack(entry))
                         }
                     }
                     Button("Clear missed calls", action: history.clear)

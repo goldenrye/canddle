@@ -400,6 +400,18 @@ final class CallStore: ObservableObject {
         }
     }
 
+    func canCallBack(_ entry: MissedCallStore.Entry) -> Bool {
+        guard !busy, !systemCalls.hasCall,
+              missedCalls.missed.contains(where: { $0.id == entry.id }),
+              let settings = try? RelaySettings(address: address, token: token, root: root) else { return false }
+        return lobby.canCallBack(entry, in: settings.url.absoluteString)
+    }
+
+    func callBack(_ entry: MissedCallStore.Entry) {
+        guard canCallBack(entry) else { return }
+        lobby.callBack(entry, in: entry.scope)
+    }
+
     func startGroupAudio() {
         guard !busy else { return }
         let id = UUID()

@@ -65,6 +65,8 @@ TOKEN = "group-test-" + "a" * 40
         "missed-cancel-away",
         "missed-timeout",
         "missed-group-timeout",
+        "callback",
+        "callback-old",
     ],
 )
 async def test_native_group(mode, tmp_path):
@@ -74,6 +76,11 @@ async def test_native_group(mode, tmp_path):
         else None
     )
     relay = Relay(TOKEN, turn=turn)
+    if mode == "callback-old":
+        original_challenge = relay.group.challenge
+        relay.group.challenge = lambda nonce: {
+            key: value for key, value in original_challenge(nonce).items() if key != "direct"
+        }
     if mode == "profiles-old":
         original_challenge = relay.group.challenge
         relay.group.challenge = lambda nonce: {

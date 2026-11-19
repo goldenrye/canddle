@@ -51,7 +51,7 @@ struct CallView: View {
         NavigationStack {
             List {
                 CallStatusCard(call: call, lobby: lobby, configured: configured)
-                MissedCallsSection(history: call.missedCalls, badge: call.callBadge, lobby: lobby)
+                MissedCallsSection(history: call.missedCalls, badge: call.callBadge, lobby: lobby, call: call)
                 if let notification = lobby.notification {
                     HStack(spacing: 8) {
                         Label(notification, systemImage: "info.circle")
