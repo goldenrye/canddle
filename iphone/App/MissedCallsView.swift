@@ -81,18 +81,20 @@ final class CallBadgeStore: ObservableObject {
 struct MissedCallsSection: View {
     @ObservedObject var history: MissedCallStore
     @ObservedObject var badge: CallBadgeStore
+    @ObservedObject var lobby: GroupStore
 
     var body: some View {
         if history.count > 0 {
             Section {
                 DisclosureGroup {
                     ForEach(history.missed) { entry in
-                        HStack {
-                            Image(systemName: "phone.arrow.down.left.fill").foregroundStyle(.red)
+                        HStack(spacing: 12) {
+                            callerPhoto(entry)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.name).font(.body.weight(.semibold))
-                                Text(entry.group ? "Missed group call" : "Missed call")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                Label(entry.group ? "Missed group call" : "Missed call",
+                                      systemImage: "phone.arrow.down.left.fill")
+                                    .font(.caption).foregroundStyle(.red)
                             }
                             Spacer()
                             Text(entry.date, style: .relative).font(.caption).foregroundStyle(.secondary)
@@ -101,8 +103,16 @@ struct MissedCallsSection: View {
                     Button("Clear missed calls", action: history.clear)
                         .accessibilityIdentifier("clearMissedCalls")
                 } label: {
-                    Label("Missed calls (\(history.count))", systemImage: "phone.badge.waveform")
-                        .foregroundStyle(.red)
+                    HStack(spacing: 12) {
+                        if let latest = history.missed.first { callerPhoto(latest) }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Missed calls (\(history.count))", systemImage: "phone.badge.waveform")
+                                .foregroundStyle(.red)
+                            if let latest = history.missed.first {
+                                Text(latest.name).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
                 BadgePermissionView(badge: badge)
             }
@@ -114,6 +124,10 @@ struct MissedCallsSection: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func callerPhoto(_ entry: MissedCallStore.Entry) -> some View {
+        ProfilePhotoCircle(data: lobby.memberPhoto(entry.caller, in: entry.scope), size: 40)
     }
 }
 

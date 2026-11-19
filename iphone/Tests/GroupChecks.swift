@@ -161,8 +161,13 @@ struct GroupChecks {
                     host.updateProfile(photo: custom, revision: 2)
                     try await wait(seconds: 8) { guest.profiles[host.ownIdentity]?.photo == custom }
                     let hostID = host.ownIdentity
+                    precondition(guest.memberPhoto(hostID, in: settings.url.absoluteString) == custom)
+                    precondition(guest.memberPhoto(hostID, in: "wss://another.example/relay").isEmpty)
+                    precondition(guest.memberPhoto(hostID, in: "").isEmpty)
+                    precondition(guest.memberPhoto(clients[2].ownIdentity, in: settings.url.absoluteString).isEmpty)
                     guest.disconnect()
                     precondition(guest.profiles[hostID]?.photo == custom)
+                    precondition(guest.memberPhoto(hostID, in: settings.url.absoluteString) == custom)
                     host.disconnect()
                     guest.connect(settings)
                     try await wait { guest.online && guest.presenceReady }
@@ -175,6 +180,7 @@ struct GroupChecks {
                     precondition(reloaded.groupDirectory.contains { $0.id == hostID && $0.name == host.name })
                     try await wait { reloaded.online && reloaded.presenceReady }
                     precondition(reloaded.profiles[hostID]?.photo == custom)
+                    precondition(reloaded.memberPhoto(hostID, in: settings.url.absoluteString) == custom)
                     precondition(ProfileImage.sharedImage(reloaded.profiles[hostID]!.photo) != nil)
                     precondition(reloaded.groupDirectory.first { $0.id == hostID }?.state == .disconnected)
                     reloaded.disconnect()
@@ -192,6 +198,7 @@ struct GroupChecks {
                     try await wait { guest.online && host.online }
                     host.updateProfile(photo: Data(), revision: 3)
                     try await wait(seconds: 8) { guest.profiles[host.ownIdentity]?.photo.isEmpty == true }
+                    precondition(guest.memberPhoto(hostID, in: settings.url.absoluteString).isEmpty)
                     precondition(host.online && guest.online && host.trusted.isEmpty && guest.trusted.isEmpty)
                 }
                 print("PASS group \(input.mode)")

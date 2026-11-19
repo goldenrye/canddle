@@ -88,6 +88,11 @@ final class GroupStore: ObservableObject {
     private var generation = UUID()
     private var scope = ""
     var relayScope: String { scope }
+    func memberPhoto(_ identity: String, in relayScope: String) -> Data {
+        guard !relayScope.isEmpty, relayScope == scope else { return Data() }
+        return profiles[identity]?.photo ?? Data()
+    }
+
     private var sessionName = ""
     private var roster: GroupRoster?
     private var proposed: GroupRoster?
