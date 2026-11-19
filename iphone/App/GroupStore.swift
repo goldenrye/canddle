@@ -169,7 +169,8 @@ final class GroupStore: ObservableObject {
     }
 
     var groupDirectory: [GroupPresence] {
-        var names: [String: String] = [:]
+        // Older caches and offline relay snapshots may have a photo but no remembered name.
+        var names = profiles.mapValues { "Saved member " + LobbyProtocol.fingerprint($0.identity).prefix(8) }
         let prefix = scope + "|"
         for (key, value) in trusted where key.hasPrefix(prefix) {
             names[String(key.dropFirst(prefix.count))] = value
@@ -212,9 +213,10 @@ final class GroupStore: ObservableObject {
             let key = try Curve25519.Signing.PrivateKey(rawRepresentation: saved.secret)
             signing = key
             if scope != settings.url.absoluteString {
-                knownNames = [:]
                 presence = [:]
                 profiles = profileCache.load(scope: settings.url.absoluteString)
+                knownNames = profileCache.loadNames(scope: settings.url.absoluteString)
+                    .filter { profiles[$0.key] != nil }
             }
             localIdentity = VoiceProtocol.base64(key.publicKey.rawRepresentation)
             identity = saved
@@ -786,7 +788,7 @@ final class GroupStore: ObservableObject {
             if let previous = profiles[profile.identity], previous.revision >= profile.revision { return }
             guard profiles[profile.identity] != nil || profiles.count < 128 else { return }
             profiles[profile.identity] = profile
-            profileCache.save(profiles, scope: scope)
+            profileCache.save(profiles, scope: scope, names: knownNames)
         case "recovery-ready":
             guard recoverySupported, Set(message.keys) == ["type", "token"],
                   let token = message["token"] else { throw VoiceError.packet }
@@ -862,14 +864,17 @@ final class GroupStore: ObservableObject {
             let snapshot = try GroupPresenceSnapshot(message)
             let updatedPresence = Dictionary(uniqueKeysWithValues: snapshot.members.map { ($0.id, $0) })
             if presence != updatedPresence { presence = updatedPresence }
-            // Remember a bounded set for this relay during this app session only.
+            // Persist names beside signed photos so offline rows survive a process restart.
             var updatedNames = knownNames
             for member in snapshot.members {
                 if updatedNames[member.id] != nil || updatedNames.count < 128 {
                     updatedNames[member.id] = member.name
                 }
             }
-            if knownNames != updatedNames { knownNames = updatedNames }
+            if knownNames != updatedNames {
+                knownNames = updatedNames
+                profileCache.save(profiles, scope: scope, names: knownNames)
+            }
             if !presenceReady { presenceReady = true }
             if presenceTruncated != snapshot.truncated { presenceTruncated = snapshot.truncated }
         case "push-capabilities":

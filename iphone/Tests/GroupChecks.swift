@@ -1,6 +1,9 @@
 import Combine
+import CoreGraphics
 import CryptoKit
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 @main
 struct GroupChecks {
@@ -25,6 +28,19 @@ struct GroupChecks {
 
     static func pcm(_ sample: UInt16) -> Data {
         Data((0..<320).flatMap { _ in [UInt8(truncatingIfNeeded: sample), UInt8(sample >> 8)] })
+    }
+
+    static func photo(gray: CGFloat) throws -> Data {
+        let context = CGContext(data: nil, width: 160, height: 160, bitsPerComponent: 8,
+            bytesPerRow: 640, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(gray: gray, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 160, height: 160))
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        return try ProfileImage.prepare(data as Data)
     }
 
     @MainActor static func audio(_ clients: [GroupStore]) async throws {
@@ -130,7 +146,7 @@ struct GroupChecks {
             }
             if input.mode.hasPrefix("profiles") {
                 let guest = clients[1]
-                let photo = Data([0xff, 0xd8, 0xff, 0xd9])
+                let photo = try Self.photo(gray: 0.3)
                 host.updateProfile(photo: photo, revision: 1)
                 host.connect(settings)
                 guest.connect(settings)
@@ -141,7 +157,7 @@ struct GroupChecks {
                 } else {
                     try await wait { guest.profiles[host.ownIdentity]?.photo == photo }
                     precondition(host.trusted.isEmpty && guest.trusted.isEmpty)
-                    let custom = Data([0xff, 0xd8, 1, 2, 0xff, 0xd9])
+                    let custom = try Self.photo(gray: 0.8)
                     host.updateProfile(photo: custom, revision: 2)
                     try await wait(seconds: 8) { guest.profiles[host.ownIdentity]?.photo == custom }
                     let hostID = host.ownIdentity
@@ -155,9 +171,22 @@ struct GroupChecks {
                         profileCache: MemberProfileCache(defaults: defaults[1]))
                     guest.disconnect()
                     reloaded.connect(settings)
-                    try await wait { reloaded.online }
+                    // Disk restoration must populate the actual directory before a network reply.
+                    precondition(reloaded.groupDirectory.contains { $0.id == hostID && $0.name == host.name })
+                    try await wait { reloaded.online && reloaded.presenceReady }
                     precondition(reloaded.profiles[hostID]?.photo == custom)
+                    precondition(ProfileImage.sharedImage(reloaded.profiles[hostID]!.photo) != nil)
+                    precondition(reloaded.groupDirectory.first { $0.id == hostID }?.state == .disconnected)
                     reloaded.disconnect()
+                    // This phone has no local photo cache and never overlapped with the sender.
+                    let late = clients[2]
+                    late.connect(settings)
+                    try await wait { late.online && late.presenceReady && late.profiles[hostID] != nil }
+                    precondition(late.profiles[hostID]?.photo == custom)
+                    precondition(ProfileImage.sharedImage(late.profiles[hostID]!.photo) != nil)
+                    precondition(late.groupDirectory.first { $0.id == hostID }?.state == .disconnected)
+                    precondition(!late.inCall && late.trusted.isEmpty)
+                    late.disconnect()
                     guest.connect(settings)
                     host.connect(settings)
                     try await wait { guest.online && host.online }

@@ -77,9 +77,11 @@ import UniformTypeIdentifiers
         defer { defaults.removePersistentDomain(forName: suite) }
         let cache = MemberProfileCache(defaults: defaults)
         let scope = "wss://family.example/relay"
-        cache.save([signed.identity: signed], scope: scope)
+        cache.save([signed.identity: signed], scope: scope, names: [signed.identity: "Family iPhone"])
         precondition(MemberProfileCache(defaults: defaults).load(scope: scope)[signed.identity] == signed)
+        precondition(cache.loadNames(scope: scope)[signed.identity] == "Family iPhone")
         precondition(cache.load(scope: "wss://another.example/relay").isEmpty)
+        precondition(cache.loadNames(scope: "wss://another.example/relay").isEmpty)
         cache.save([removed.identity: removed], scope: scope)
         precondition(cache.load(scope: scope)[removed.identity]?.photo.isEmpty == true)
         // Reload keeps the highest signed revision even if the saved array contains a replay.
@@ -87,6 +89,12 @@ import UniformTypeIdentifiers
         defaults.set(try JSONSerialization.data(withJSONObject: duplicates), forKey: "memberProfiles.v1")
         precondition(cache.load(scope: scope)[removed.identity]?.revision == 2)
         precondition(cache.load(scope: scope).count == 1)
+        precondition(cache.loadNames(scope: scope).isEmpty) // Previous cache format still loads.
+        var invalidNames = duplicates
+        invalidNames["names"] = [signed.identity: "Invalid\nname", "invalid-key": "Family"]
+        defaults.set(try JSONSerialization.data(withJSONObject: invalidNames), forKey: "memberProfiles.v1")
+        precondition(cache.loadNames(scope: scope).isEmpty)
+        precondition(cache.load(scope: scope)[removed.identity]?.revision == 2)
         defaults.set(Data(count: 1_100_001), forKey: "memberProfiles.v1")
         precondition(cache.load(scope: scope).isEmpty)
         let tooMany: [String: Any] = ["scope": scope, "profiles": Array(repeating: signed.message, count: 129)]

@@ -127,3 +127,66 @@ async def test_profile_survives_authenticated_handoff():
         async with resume(url, alice, offer["call"], at) as replacement:
             await snapshot(replacement, membership)
             assert group.peers[alice.identity].profile == photo
+
+
+async def test_later_subscriber_receives_offline_photo_and_removal():
+    async with group_server() as (group, url):
+        async with client(url) as (a, alice):
+            photo = profile(alice, revision="2")
+            await send(a, photo)
+            await sync(a)
+        async with client(url) as (b, _):
+            assert alice.identity not in group.peers
+            await send(b, {"type": "profile-subscribe"})
+            assert await recv(b, "profile") == photo
+            await sync(b)
+        async with client(url, alice) as (a, _):
+            removed = profile(alice, b"", "3")
+            await send(a, removed)
+            await sync(a)
+        async with client(url) as (b, _):
+            await send(b, {"type": "profile-subscribe"})
+            assert await recv(b, "profile") == removed
+        # A new connection must not resurrect a signed photo older than the removal.
+        async with client(url, alice) as (a, _):
+            await send(a, photo)
+            with pytest.raises(ConnectionClosed):
+                await a.recv()
+        assert group.profile_cache[alice.identity] == removed
+
+
+async def test_offline_profile_cache_and_snapshot_are_bounded():
+    group = GroupLobby()
+    first = None
+    for index in range(140):
+        device = Device()
+        first = first or device.identity
+        peer = Peer(SimpleNamespace(transport=Mock()), device.identity, device.name)
+        group.dispatch(peer, profile(device, revision=str(index + 1)))
+    assert len(group.profile_cache) == 128
+    assert first not in group.profile_cache
+    device = Device()
+    subscriber = Peer(SimpleNamespace(transport=Mock()), device.identity, device.name)
+    group.peers[device.identity] = subscriber
+    group.dispatch(subscriber, {"type": "profile-subscribe"})
+    await asyncio.sleep(0)
+    assert subscriber.queue.qsize() == 32
+    assert len(subscriber.profile_seen) == 32
+    received = [subscriber.queue.get_nowait() for _ in range(32)]
+    assert received == list(reversed(list(group.profile_cache.values())))[:32]
+    group.presence_changed()
+    await asyncio.sleep(0)
+    assert subscriber.queue.empty()
+    group.shutdown()
+    assert not group.profile_cache
+
+
+async def test_offline_profiles_do_not_leak_to_a_different_relay():
+    async with group_server() as (_, url):
+        async with client(url) as (a, alice):
+            await send(a, profile(alice))
+            await sync(a)
+        async with group_server() as (other, other_url), client(other_url) as (b, _):
+            await send(b, {"type": "profile-subscribe"})
+            await sync(b)
+            assert not other.profile_cache

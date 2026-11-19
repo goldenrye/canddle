@@ -502,10 +502,18 @@ Profiles are separate from presence frames, with at most 32 thumbnails in a
 snapshot, bounded per-subscriber revision tracking and a 128-profile client cache.
 Updates have an independent four-message burst / one-per-five-seconds refill;
 excess cosmetic updates are dropped rather than consuming call-control budgets.
-Unchanged profiles are not resent. Relay profile state lives on registered peers,
-is transferred by authenticated handoff, and disappears when registration ends.
+Unchanged profiles are not resent. The relay retains up to 128 recently published,
+signature-checked profiles in memory after registration ends, including removal
+tombstones. The snapshot prioritizes up to 32 live profiles, then fills remaining
+slots with recent cached profiles, without increasing the 32-frame budget.
+Cached revisions reject rollback on subsequent registrations while retained.
+Restart/shutdown and bounded eviction clear this relay cache; it is not written
+to disk. A later authorized subscriber can receive an offline device's image
+without having previously overlapped with it online.
 Received profiles persist in local preferences, bounded to 128 signed messages
-and 1.1 MB for one relay URL. Reload verifies signatures and retains the highest
+and 1.1 MB for one relay URL, plus validated last-known names for those profiles.
+Names remain relay-asserted cosmetic labels, not signature-verified identity proof.
+Reload verifies profile signatures and retains the highest
 revision, including empty-photo removal tombstones. Another relay cannot reuse
 the cached images. Disconnect does not erase them; forgetting the relay or
 verified peers does. This preserves previously seen images, not freshness:
@@ -692,8 +700,9 @@ group devices' public keys, registered names, and calling/joining/admitted state
 Snapshots are bounded to 32 entries, coalesced, and sent only when changed.
 Presence is relay-asserted metadata, not end-to-end proof of identity or audio
 activity, and never grants admission or bypasses peer verification. Discovered
-names are cached in memory (up to 128); saved verified names remain relay-scoped.
-The group directory prefers current, then session-cached names over saved verified
+names are cached in memory (up to 128); names associated with cached profiles also
+persist in local preferences. Saved verified names remain relay-scoped.
+The group directory prefers current, then cached names over saved verified
 names. A differing original verified name remains visible in identity details;
 presence updates never overwrite saved trust or change admission decisions.
 Disconnected devices may still be reachable by APNs. No push tokens, access

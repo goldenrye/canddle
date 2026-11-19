@@ -40,6 +40,7 @@ class GroupLobby(Lobby):
         self.request_timers = {}
         self.presence_subscribers = {}
         self.presence_update = None
+        self.profile_cache = {}
         self.resume_timers = {}
         self.roster_messages = {}
         self.refresh_pending = {}
@@ -180,6 +181,7 @@ class GroupLobby(Lobby):
             self.presence_update.cancel()
             self.presence_update = None
         self.presence_subscribers.clear()
+        self.profile_cache.clear()
 
     def request_refresh(self, call):
         timer = self.refresh_timers.pop(call, None)
@@ -283,6 +285,12 @@ class GroupLobby(Lobby):
                 self.presence_subscribers[peer] = message
         # Profile thumbnails travel separately, never multiplying the presence frame.
         profiles = {peer.identity: peer.profile for peer in peers[:32] if peer.profile}
+        # A later subscriber may never have overlapped with an offline phone.
+        # Keep snapshots within the existing 32-frame budget and favor live peers.
+        for identity, profile in reversed(self.profile_cache.items()):
+            if len(profiles) >= 32:
+                break
+            profiles.setdefault(identity, profile)
         for peer in peers:
             if not peer.profile_subscribed or peer.suspended:
                 continue
@@ -392,11 +400,16 @@ class GroupLobby(Lobby):
                 self.presence_changed()
                 return
             revision = validate_profile(message, peer.identity)
-            if peer.profile:
-                previous = int(peer.profile["revision"])
-                if revision < previous or (revision == previous and message != peer.profile):
+            previous_profile = peer.profile or self.profile_cache.get(peer.identity)
+            if previous_profile:
+                previous = int(previous_profile["revision"])
+                if revision < previous or (revision == previous and message != previous_profile):
                     raise ValueError("Profile rollback or conflicting revision")
             peer.profile = message
+            self.profile_cache.pop(peer.identity, None)
+            self.profile_cache[peer.identity] = message.copy()
+            if len(self.profile_cache) > 128:
+                self.profile_cache.pop(next(iter(self.profile_cache)))
             self.presence_changed()
             return
         if kind == "recovery-enable" and set(message) == {"type"} and peer.webrtc:

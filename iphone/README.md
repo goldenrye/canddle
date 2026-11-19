@@ -58,13 +58,25 @@ Photos are visible to the relay operator and other clients with access to that
 relay, not just verified family devices or current call participants. They are
 cosmetic metadata, not end-to-end-encrypted audio or identity verification.
 Sanitized contact/custom thumbnails are saved on this iPhone. The relay holds
-current profiles in memory while devices remain registered (including handoff
-grace); receiving apps save up to 128 signed profiles for one relay locally.
+up to 128 recently published signed profiles in memory after their owners go
+offline, including removal records. New subscribers receive up to 32 profiles,
+prioritizing online members, then the most recently published cached profiles.
+Receiving apps save up to 128 signed profiles and their last-known display names
+for one relay locally, so offline directory rows survive app restarts.
 Signatures are rechecked on reload, and newer removal revisions prevent an older
 photo from returning on reconnect. A different relay never uses this cache.
 Forgetting the relay or verified peers clears received photos. Removing a photo
 cannot revoke a copy another person already saved; offline recipients learn the
 removal when they next receive the sender's updated profile.
+
+For offline-photo catch-up, update **both the relay and receiving iPhone app**.
+After updating/restarting the relay, open each member's app once and leave it
+connected for at least five seconds to publish the selected photo. The phones
+do not need to be online together. Relay memory is cleared by restart and bounded
+cache eviction; photos already saved on a receiving phone remain available.
+If a photo has never reached either cache, it cannot be shown until its owner
+comes online and shares it. A cached photo without a known name uses a
+**Saved member** label with a short device fingerprint; it is not verified.
 
 Native image/protocol/persistence checks:
 
@@ -77,7 +89,9 @@ xcrun swiftc -parse-as-library iphone/Core/*.swift \
 
 On a signed iPhone, verify selecting a contact with/without a photo, cancelling
 both pickers, choosing an iCloud photo, restoring the contact default, persistence
-after relaunch, and updating/removing the avatar on a second phone.
+after relaunch, and updating/removing the avatar on a second phone. Also background
+the photo owner before opening a receiving phone with no cached photo, confirm
+the offline avatar appears, then restart the receiving app and check it again.
 
 ### Missed Calls
 
@@ -238,8 +252,8 @@ stale when needed, and duplicate presence snapshots do not republish the directo
 Live state changes still appear normally. Check scroll position, expanded rows,
 long names, and accessibility text sizes on a physical iPhone.
 
-The **Group members** list on Calls shows this device, devices seen on the relay
-during this app session, and saved verified peers for the same relay. Statuses are
+The **Group members** list on Calls shows this device, devices seen on the relay,
+cached profile owners, and saved verified peers for the same relay. Statuses are
 **Online**, **Calling**, **Joining**, **In call**, **Not connected**, or **Unknown**.
 These are relay-reported connection/admission states, not microphone, mute, or
 guaranteed call-delivery status. A locked/backgrounded phone marked Not connected
@@ -250,8 +264,8 @@ Rebuild/redeploy the relay to enable live presence (`docker compose up -d --buil
 retaining the push override when used). The app negotiates support automatically;
 older relays still support calls but cannot provide live member statuses. Older
 clients do not receive presence frames. Snapshots list up to 32 connected group
-devices, with a warning when truncated, and discovered names are retained only
-in a bounded in-memory cache. This is not a permanent directory of everyone who
+devices, with a warning when truncated. Discovered names are bounded in memory;
+names associated with cached photos also persist locally. This is not a permanent directory of everyone who
 has ever paired, and desktop/manual-call clients are not included.
 
 Unanswered announcements and individual join requests expire after two minutes.
@@ -287,9 +301,9 @@ English characters. Names cannot change during a call or pending join request.
 The **About** section in Settings shows the installed app version and build number.
 After saving, return to Calls to reconnect and publish the new name. Peers' group
 member lists show the latest received name, retaining it while you are offline
-for that app session. The original name remains in the expanded identity details
+and across relaunches when your profile is cached. The original name remains in the expanded identity details
 as **Name when verified**; renaming does not change device-key trust. Without a
-current or session-cached name, the list falls back to the saved verified name.
+current or cached name, the list falls back to the saved verified name.
 **Advanced > Reset saved settings >**
 **Forget verified peers** removes all saved peer trust (up to 100 keys across
 relays) while retaining your own device identity. In the same section, **Forget saved relay** deletes
