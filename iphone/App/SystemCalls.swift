@@ -37,6 +37,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     init(owner: CallStore) {
         self.owner = owner
         let config = CXProviderConfiguration()
+        config.iconTemplateImageData = CallBranding.iconTemplate()
         config.supportsVideo = false
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
@@ -72,8 +73,8 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         // Every VoIP push is reported before network work, even stale or malformed ones.
         let id = UUID()
         let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "canddle")
-        update.localizedCallerName = "Incoming canddle call"
+        update.remoteHandle = CXHandle(type: .generic, value: "Canddle")
+        update.localizedCallerName = "Incoming Canddle call"
         update.supportsHolding = false
         update.supportsGrouping = false
         update.supportsUngrouping = false
@@ -106,9 +107,9 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
                     self.callID = offer.id
                     // Display saved names only after checking the caller's signed offer.
                     update.localizedCallerName = identity.trusted[scope + "|" + offer.identity]
-                        ?? "Unverified canddle caller"
+                        ?? "Unverified Canddle caller"
                     update.remoteHandle = CXHandle(type: .generic,
-                        value: offer.target == nil ? "canddle group call" : "canddle individual call")
+                        value: offer.target == nil ? "Canddle group call" : "Canddle individual call")
                     self.provider.reportCall(with: id, updated: update)
                     self.backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
                         Task { @MainActor in self?.end(reason: .failed) }
@@ -133,7 +134,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         guard action.callUUID == uuid, let offer, let owner else { action.fail(); return }
         guard AVAudioSession.sharedInstance().recordPermission == .granted else {
-            owner.callFailure = "Open canddle and grant microphone access before answering a locked-screen call."
+            owner.callFailure = "Open Canddle and grant microphone access before answering a locked-screen call."
             action.fail()
             end(reason: .failed)
             return
@@ -150,7 +151,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
                    let current = owner.lobby.offers.first(where: { $0.id == offer.id }) {
                     guard current.message == offer.message else { end(reason: .failed); return }
                     guard owner.lobby.trustedName(current.identity) != nil else {
-                        owner.callFailure = "Open canddle and verify this caller's security code before joining."
+                        owner.callFailure = "Open Canddle and verify this caller's security code before joining."
                         end(reason: .failed)
                         return
                     }
@@ -208,7 +209,7 @@ final class SystemCalls: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         callID = call
         outgoingAudio.start(admitted: admitted)
         let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic,
-            value: individual ? "canddle individual call" : "canddle group call"))
+            value: individual ? "Canddle individual call" : "Canddle group call"))
         controller.request(CXTransaction(action: action)) { [weak self] error in
             guard error != nil else { return }
             Task { @MainActor in

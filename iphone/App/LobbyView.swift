@@ -390,7 +390,7 @@ struct LocalNetworkHint: View {
     var body: some View {
         if access.state == .denied {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Local Network is off for canddle, so calls with phones on the same Wi-Fi go through your relay and have more delay.")
+                Text("Local Network is off for Canddle, so calls with phones on the same Wi-Fi go through your relay and have more delay.")
                 Button("Turn On in Settings") {
                     if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                 }

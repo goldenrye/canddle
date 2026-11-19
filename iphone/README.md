@@ -1,6 +1,6 @@
 # iPhone Client
 
-The installed app is named **canddle** and uses the supplied six-can-and-flame
+The installed app is named **Canddle** and uses the current Canddle
 artwork for its icon and in-app branding. The Xcode project and target are named
 `Canddle`; the bundle identifier is unchanged, preserving existing Keychain
 settings when updating with the same signing identity.
@@ -74,6 +74,15 @@ both pickers, choosing an iCloud photo, restoring the contact default, persisten
 after relaunch, and updating/removing the avatar on a second phone.
 
 ### Dialing and Speaker
+
+Incoming and outgoing system calls supply a transparent, monochrome Canddle
+can-and-waves icon through CallKit's provider configuration. It is a 40-point
+template, not the opaque full-color Home Screen icon. iOS controls its tint and
+placement; compact banners, full-screen calls and the Dynamic Island may present
+branding differently. It does not replace the caller's name or contact photo.
+The app's navigation title also says **Canddle call** while dialing or in a call.
+`Core/CallBranding.swift` contains the small template rendition; keep it aligned
+with `Branding/RenderIcon.swift` if the main artwork changes.
 
 Outgoing individual/group calls play a local ringback tone after CallKit activates
 audio, until the first participant is admitted. The tone means the call request

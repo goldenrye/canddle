@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+                F60000000000000000000003 /* CallBranding.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004; };
                 F60000000000000000000001 /* CallAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000002; };
                 F50000000000000000000001 /* DeviceProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000002; };
                 F50000000000000000000003 /* ProfileImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000004; };
@@ -46,6 +47,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+                F60000000000000000000004 /* CallBranding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallBranding.swift; sourceTree = "<group>"; };
                 F60000000000000000000002 /* CallAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudio.swift; sourceTree = "<group>"; };
                 F50000000000000000000002 /* DeviceProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceProfile.swift; sourceTree = "<group>"; };
                 F50000000000000000000004 /* ProfileImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileImage.swift; sourceTree = "<group>"; };
@@ -137,6 +139,7 @@
                                 F50000000000000000000002 /* DeviceProfile.swift */,
                                 F50000000000000000000004 /* ProfileImage.swift */,
                                 F60000000000000000000002 /* CallAudio.swift */,
+                                F60000000000000000000004 /* CallBranding.swift */,
                                 F20000000000000000000007 /* WebRTCProtocol.swift */,
 				F00000000000000000000003 /* GroupProtocol.swift */,
 				E00000000000000000000004 /* LobbyProtocol.swift */,
@@ -240,6 +243,7 @@
                                 F50000000000000000000001 /* DeviceProfile.swift in Sources */,
                                 F50000000000000000000003 /* ProfileImage.swift in Sources */,
                                 F60000000000000000000001 /* CallAudio.swift in Sources */,
+                                F60000000000000000000003 /* CallBranding.swift in Sources */,
                                 F50000000000000000000005 /* ProfilePhotoStore.swift in Sources */,
                                 F50000000000000000000007 /* ProfilePhotoView.swift in Sources */,
                                 F20000000000000000000004 /* WebRTCAudio.swift in Sources */,

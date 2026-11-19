@@ -20,7 +20,7 @@ struct CanddleApp: App {
                                         .frame(width: 96, height: 96)
                                         .clipShape(RoundedRectangle(cornerRadius: 22))
                                         .accessibilityHidden(true)
-                                    Text("canddle").font(.title)
+                                    Text("Canddle").font(.title)
                                 }
                             }
                     }
@@ -103,7 +103,7 @@ struct CallView: View {
             }
             .listStyle(.insetGrouped)
             .tint(.teal)
-            .navigationTitle("Calls")
+            .navigationTitle(lobby.waiting || (call.busy && !call.pairing) ? "Canddle call" : "Calls")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink {

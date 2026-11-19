@@ -263,7 +263,7 @@ final class CallStore: ObservableObject {
         do {
             pairingTicket = try PairingTicket.parse(text)
         } catch {
-            status = "Not a valid canddle pairing QR. Generate a new code on your server."
+            status = "Not a valid Canddle pairing QR. Generate a new code on your server."
         }
     }
 
@@ -669,7 +669,7 @@ final class CallStore: ObservableObject {
     func background() {
         if !systemCalls.hasCall {
             lobby.disconnect("Listening for incoming calls through Apple push.")
-            hangUp("Call ended because canddle left the foreground.")
+            hangUp("Call ended because Canddle left the foreground.")
         }
         scannedQR = nil
         scanningPairing = false
