@@ -72,6 +72,14 @@ Old clients continue to work with the upgraded relay.
 
 ## Call Behavior
 
+Private text uses **regular APNs alert notifications**, never VoIP pushes.
+The optional message database and iOS alert permission are separate requirements.
+The existing Apple signing key is reused with the normal app topic and normal
+APNs device token. Alerts contain only generic text and do not change the
+missed-call Home Screen badge. Tap an alert to open Messages and retrieve/decrypt
+queued text; no notification extension performs background decryption.
+See [Private Messages](MESSAGING.md) for setup and two-phone checks.
+
 - A signed group announcement rings registered devices, excluding the caller.
   An individual call from a member's phone icon rings only that selected device.
   Both phones and the relay must support individual calls; no group fallback occurs.

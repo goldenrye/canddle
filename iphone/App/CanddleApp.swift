@@ -88,6 +88,9 @@ struct CallView: View {
             .navigationTitle(lobby.waiting || (call.busy && !call.pairing) ? "Canddle call" : "Calls")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    MessageInboxButton(call: call, lobby: lobby, messages: call.messages)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink {
                         RelaySettingsView(call: call, lobby: lobby)

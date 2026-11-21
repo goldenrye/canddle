@@ -1,0 +1,7 @@
+# Optional private text mailbox. May be combined with compose.push.yaml and WebRTC.
+services:
+  relay:
+    environment:
+      VPCOMM_MESSAGES_DB: /var/lib/canddle-messages/messages.sqlite
+    volumes:
+      - ${VPCOMM_MESSAGES_DATA_DIR:?Set an absolute private message data directory}:/var/lib/canddle-messages

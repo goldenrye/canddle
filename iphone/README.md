@@ -35,6 +35,16 @@ review remain release tasks.
 
 Use a relay deployed according to [`../deploy/README.md`](../deploy/README.md).
 
+### Private Messages
+
+Tap the bubble icon on Calls to exchange encrypted private text with previously
+verified iPhone devices. Conversations show delivery status, retry controls,
+unread counts, missed calls, and a private call button. Offline messages queue
+for up to seven days. This requires the optional relay message database; regular
+APNs configuration and alert permission are additionally needed for background
+notifications. See [setup, limitations and testing](MESSAGING.md).
+This experimental messaging protocol has no forward secrecy or key ratchet.
+
 ### Profile Photos
 
 Open **Settings > Profile photo**:

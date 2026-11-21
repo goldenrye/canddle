@@ -194,6 +194,38 @@ class APNs:
         LOG.warning("APNs rejected a VoIP delivery (HTTP %s)", response.status_code)
         return True
 
+    async def send_message(self, device):
+        host = (
+            "api.sandbox.push.apple.com"
+            if device.environment == "development"
+            else "api.push.apple.com"
+        )
+        response = await self.client.post(
+            f"https://{host}/3/device/{device.token}",
+            headers={
+                "authorization": self.authorization(),
+                "apns-topic": self.topic.removesuffix(".voip"),
+                "apns-push-type": "alert",
+                "apns-priority": "10",
+                "apns-expiration": str(int(time.time() + 3600)),
+                "apns-collapse-id": "canddle.messages",
+            },
+            json={
+                "aps": {
+                    "alert": {"title": "Canddle", "body": "You have a new private message."},
+                    "sound": "default",
+                },
+                "canddle_message": True,
+            },
+        )
+        if response.status_code == 200:
+            return True
+        reason = response.json().get("reason", "") if response.content else ""
+        if response.status_code == 410 or reason in {"BadDeviceToken", "Unregistered"}:
+            return False
+        LOG.warning("APNs rejected a message notification (HTTP %s)", response.status_code)
+        return True
+
     async def close(self):
         await self.client.aclose()
 

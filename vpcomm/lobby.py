@@ -77,6 +77,10 @@ class Peer:
     profile_seen: dict = field(default_factory=dict)
     profile_allowance: float = 4
     profile_last: float = field(default_factory=time.monotonic)
+    chat_scope: str | None = None
+    chat_cursor: int = 0
+    chat_allowance: float = 40
+    chat_last: float = field(default_factory=time.monotonic)
 
     def emit(self, message):
         if self.suspended:

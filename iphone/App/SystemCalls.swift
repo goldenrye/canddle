@@ -3,14 +3,45 @@ import CallKit
 import CryptoKit
 import PushKit
 import UIKit
+import UserNotifications
 
 /// Created at process launch, including launches caused by a VoIP push.
 @MainActor
-final class CallAppDelegate: NSObject, UIApplicationDelegate {
+final class CallAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         CallStore.shared.systemCalls.register()
+        UNUserNotificationCenter.current().delegate = self
+        application.registerForRemoteNotifications()
         return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken token: Data) {
+        let messages = CallStore.shared.messages
+        messages.notificationError = nil
+        messages.notificationToken = token.map { String(format: "%02x", $0) }.joined()
+        messages.environment = Bundle.main.object(forInfoDictionaryKey: "APNSEnvironment") as? String ?? "development"
+        Task { await messages.flush() }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        CallStore.shared.messages.notificationError =
+            "Apple message alerts could not register. Check network access and app push provisioning, then enable notifications again."
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completion: @escaping () -> Void) {
+        if response.notification.request.content.userInfo["canddle_message"] as? Bool == true {
+            CallStore.shared.messages.showInbox = true
+        }
+        completion()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completion: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let call = CallStore.shared
+        let message = notification.request.content.userInfo["canddle_message"] as? Bool == true
+        completion(message && !call.busy && !call.messages.showInbox ? [.banner] : [])
     }
 }
 

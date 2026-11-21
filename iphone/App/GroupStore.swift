@@ -71,6 +71,9 @@ final class GroupStore: ObservableObject {
     var onAudioEnded: ((String) -> Void)?
     var onCallClosed: ((String) -> Void)?
     var onDisconnected: (() -> Void)?
+    var onMessagingReady: ((Curve25519.Signing.PrivateKey, String, Bool) -> Void)?
+    var onMessagingOffline: (() -> Void)?
+    var onMessage: (([String: String]) -> Void)?
     var pushToken: String?
     var pushEnvironment = "development"
     @Published private(set) var pushStatus = "Background ringing requires Apple push provisioning."
@@ -268,6 +271,7 @@ final class GroupStore: ObservableObject {
                         try await relay.groupSend(["type": "push-capabilities"])
                     }
                     online = true
+                    onMessagingReady?(key, scope, relay.supportsMessages)
                     publishProfile()
                     status = "Online. Start a group call or call a member."
                     startHeartbeat(relay, id: id)
@@ -358,6 +362,7 @@ final class GroupStore: ObservableObject {
         beginRecoveryWindow()
         reconnecting = true
         online = false
+        onMessagingOffline?()
         awaitingResumeState = true
         offers = []
         status = "Network changed. Reconnecting the current call..."
@@ -381,6 +386,7 @@ final class GroupStore: ObservableObject {
                                           resume: (call, token))
                 guard generation == id else { return }
                 online = true
+                onMessagingReady?(signing, scope, relay.supportsMessages)
                 startHeartbeat(relay, id: id)
                 try await read(relay, id: id)
             } catch {
@@ -429,6 +435,7 @@ final class GroupStore: ObservableObject {
     }
 
     func disconnect(_ message: String = "Offline. Reconnects automatically on Calls.") {
+        onMessagingOffline?()
         generation = UUID()
         transport?.stop(); transport = nil
         profileTask?.cancel(); profileTask = nil
@@ -807,7 +814,17 @@ final class GroupStore: ObservableObject {
         Task { try? await transport.groupSend(message) }
     }
 
+    func sendMessageFrame(_ message: [String: String], scope expectedScope: String) async throws {
+        guard online, scope == expectedScope, let transport, transport.supportsMessages,
+              message["type"]?.hasPrefix("chat-") == true else { throw VoiceError.ended }
+        try await transport.groupSend(message)
+    }
+
     private func receive(_ message: [String: String]) throws {
+        if message["type"]?.hasPrefix("chat-") == true {
+            if transport?.supportsMessages == true { onMessage?(message) }
+            return
+        }
         switch message["type"] {
         case "profile":
             // Cosmetic data must never tear down a call or change identity trust.

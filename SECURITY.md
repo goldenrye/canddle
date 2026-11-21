@@ -53,6 +53,66 @@ for high-sensitivity use.
 - There is no in-call key ratchet or post-compromise recovery. A compromised
   active session key exposes its direction for that session.
 
+## Private Text Messages
+
+Optional iPhone private text uses an independent protocol, not the audio session
+keys. It is experimental and has not undergone independent cryptographic review.
+There is **no forward secrecy, Double Ratchet, or post-compromise recovery**.
+Compromise of a device's long-lived identity secret exposes retained ciphertext
+addressed to that device and its local message history. Fresh sender ephemeral
+keys do not provide forward secrecy against recipient-key compromise.
+
+- Only device identity keys already verified for the same normalized relay URL
+  are accepted locally. Names/photos never establish trust. The relay additionally
+  enforces a recipient-published allowlist, but confidentiality and sender
+  authentication do not rely on a trustworthy relay.
+- A stable per-relay X25519 key is derived from the Ed25519 device seed using
+  HKDF-SHA256, salt `vpcomm/chat/v1`, and transcript `chat-agreement(scope)`.
+  Its public bundle is Ed25519-signed over
+  `chat-key(identity, scope, key)`. A different derived key for an existing
+  device/scope registration is rejected. Reinstallation with a new identity
+  requires verifying that new device; old ciphertext is not recoverable.
+- Every message uses a random 16-byte ID and fresh ephemeral X25519 key.
+  The shared secret passes through HKDF-SHA256 with the same salt and
+  `chat-encryption(id, from, to, scope, key, ephemeral, created)` as info.
+  That metadata is also AES-256-GCM AAD. CryptoKit generates the nonce; the body
+  carries nonce, ciphertext and tag in canonical unpadded base64url.
+- The sender signs `chat-message(id, from, to, scope, key, ephemeral, created, body)`.
+  `created` is canonical integer Unix seconds, accepted within seven days and
+  at most 60 seconds into the future. Text is 1-4,096 UTF-8 bytes, not whitespace.
+  Transcripts use the existing length-prefixed `vpcomm/lobby/v1` encoding.
+- The recipient decrypts, verifies, and durably saves before signing
+  `chat-receipt(id, from, to, scope)`. A relay acknowledgement means only
+  **Queued**, never **Delivered**. Delivery does not imply reading, and a malicious
+  relay can suppress messages or receipts. Receipts expire with the original
+  message, so a sender returning after seven days can show failure even when a
+  recipient received it earlier.
+- SQLite holds only encrypted bodies, signed bundles, allowlists, routing
+  metadata, timing, receipt signatures and APNs tokens. Delivered ciphertext is
+  removed on receipt; all message records expire seven days after creation.
+  Expiry cleanup runs on traffic and every minute while the relay runs. This is
+  not guaranteed physical erasure from backups, snapshots, or SSDs.
+- iPhone history/outbox is separately AES-GCM encrypted under a per-scope
+  `chat-storage` HKDF key, written atomically, excluded from backup and protected
+  until first unlock. It holds at most 1,000 entries and 4,096 recent dedupe IDs.
+  Full or corrupt storage fails closed without acknowledging unsaved messages.
+  Dedupe survives clearing read history. History is retained until cleared;
+  editing/forgetting relay settings hides it, but does not erase its encrypted
+  file. Restoring the same relay/identity restores that history.
+- The relay and Apple see delivery timing and routing metadata. Normal APNs
+  alerts contain only generic text, no message body, name, caller offer, or
+  badge value. They are not VoIP pushes. They can be delayed, collapsed or
+  dropped, and an already queued generic alert can outlive message retrieval.
+  Opening the app performs authenticated mailbox retrieval and decryption.
+
+Removing local trust immediately prevents new local sends/decryption; pending
+relay ciphertext from that sender is removed when the next allowlist sync
+arrives. It cannot revoke plaintext or keys already obtained by another device.
+Forgetting/changing relay settings attempts authenticated revocation of both
+push token types; unreachable relays can retain usable registrations for up to
+seven days. Access-token rotation clears relay key/queue registrations at startup.
+Neither operation constitutes remote deletion of another person's history.
+
 ## Credential Separation
 
 `VPCOMM_ACCESS_TOKEN` is a server-wide bearer credential. It is supplied in the

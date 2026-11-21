@@ -26,10 +26,11 @@ class GroupLobby(Lobby):
     MAX_MEMBERS = 6
     RESUME_SECONDS = 40
 
-    def __init__(self, push=None, turn=None, **kwargs):
+    def __init__(self, push=None, turn=None, messages=None, **kwargs):
         super().__init__(**kwargs)
         self.push = push
         self.turn = turn
+        self.messages = messages
         self.epochs = {}
         self.rtc_signals = {}
         self.rtc_descriptions = {}
@@ -53,6 +54,7 @@ class GroupLobby(Lobby):
             "presence": "1",
             "profiles": "1",
             "direct": "1",
+            **({"messages": "1"} if self.messages else {}),
             **(
                 {
                     "webrtc": "1", "quality": "1", "quality_path": "1",
@@ -313,6 +315,8 @@ class GroupLobby(Lobby):
         return value
 
     def admit_control(self, peer, message):
+        if self.messages and message.get("type", "").startswith("chat-"):
+            return
         if message.get("type") in {"profile", "profile-subscribe"}:
             # Cosmetic updates must not exhaust audio/admission control budgets.
             return
@@ -386,6 +390,9 @@ class GroupLobby(Lobby):
 
     def dispatch(self, peer, message):
         kind = message.get("type")
+        if self.messages and kind and kind.startswith("chat-"):
+            self.messages.dispatch(peer, message, self.peers)
+            return
         if kind in {"profile", "profile-subscribe"}:
             now = time.monotonic()
             peer.profile_allowance = min(

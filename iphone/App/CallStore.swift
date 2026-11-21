@@ -62,6 +62,7 @@ final class CallStore: ObservableObject {
     static let shared = CallStore()
     let lobby = GroupStore()
     let missedCalls = MissedCallStore()
+    let messages = MessageStore()
     lazy var callBadge = CallBadgeStore(history: missedCalls)
     lazy var systemCalls = SystemCalls(owner: self)
     @Published var address = "" { didSet { saveRelay() } }
@@ -170,6 +171,21 @@ final class CallStore: ObservableObject {
             self.systemCalls.closed(call)
         }
         lobby.onDisconnected = { [weak self] in self?.systemCalls.disconnected() }
+        lobby.onMessagingOffline = { [weak self] in self?.messages.disconnect() }
+        lobby.onMessage = { [weak self] message in self?.messages.receive(message) }
+        lobby.onMessagingReady = { [weak self] key, scope, supported in
+            guard let self else { return }
+            self.messages.connect(signing: key, scope: scope, supported: supported, trusted: { [weak self] in
+                guard let self, self.lobby.relayScope == scope else { return [:] }
+                let prefix = scope + "|"
+                return Dictionary(uniqueKeysWithValues: self.lobby.trusted.compactMap { key, value in
+                    key.hasPrefix(prefix) ? (String(key.dropFirst(prefix.count)), value) : nil
+                })
+            }, send: { [weak self] message in
+                guard let self else { throw VoiceError.ended }
+                try await self.lobby.sendMessageFrame(message, scope: scope)
+            })
+        }
         lobby.onAudioEnded = { [weak self] message in
             guard let self, self.groupAudio else { return }
             self.task?.cancel()
@@ -182,6 +198,9 @@ final class CallStore: ObservableObject {
                 root = saved.root
                 rootFingerprint = saved.root.map(RelaySettings.fingerprint)
                 registeredRelay = saved
+                let scope = try RelaySettings(address: saved.address, token: saved.token, root: saved.root).url.absoluteString
+                let identity = try LobbyIdentity.load()
+                messages.prepare(signing: try Curve25519.Signing.PrivateKey(rawRepresentation: identity.secret), scope: scope)
             }
         } catch {
             settingsError = "Could not read the saved relay. Unlock your iPhone and reopen the app."
@@ -222,6 +241,7 @@ final class CallStore: ObservableObject {
 
     private func saveRelay() {
         guard !clearingRelay else { return }
+        messages.deactivate()
         if let saved = registeredRelay, saved.address != address || saved.token != token {
             registeredRelay = nil
             revokePush(saved)
@@ -241,6 +261,7 @@ final class CallStore: ObservableObject {
         lobby.disconnect()
         do {
             try SavedRelay.remove()
+            messages.deactivate()
             lobby.forgetMemberPhotos()
             missedCalls.forget()
             clearingRelay = true

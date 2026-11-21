@@ -20,6 +20,7 @@ from websockets.exceptions import ConnectionClosed
 from .crypto import encode
 from .group import GroupLobby
 from .lobby import Lobby, name_valid, transcript, verify
+from .messages import Messages
 from .pairing import PairingCodes, admin_socket
 from .push import from_environment
 from .webrtc import SIGNAL_LIMIT
@@ -47,6 +48,7 @@ class Relay:
         pairing: PairingCodes | None = None,
         push=None,
         turn=None,
+        messages=None,
     ):
         if len(access_token) < 32 or not access_token.isascii():
             raise ValueError("Access token must be at least 32 ASCII characters")
@@ -60,7 +62,7 @@ class Relay:
         self.connections = 0
         self.pairing = pairing
         self.lobby = Lobby()
-        self.group = GroupLobby(push=push, turn=turn)
+        self.group = GroupLobby(push=push, turn=turn, messages=messages)
 
     def authorize(self, connection, request):
         if request.path == "/pair":
@@ -211,6 +213,8 @@ class Relay:
                 raise ValueError("Push control supports only revocation")
             if self.group.push:
                 self.group.push.devices.remove(hello["identity"])
+            if self.group.messages:
+                self.group.messages.revoke_push(hello["identity"])
             await socket.send('{"type":"push-unregistered"}')
 
 
@@ -244,6 +248,10 @@ async def run(args):
     public_url = os.environ.get("VPCOMM_PUBLIC_RELAY_URL", "")
     pairing = PairingCodes(public_url) if public_url else None
     push = from_environment(token)
+    messages_path = os.environ.get("VPCOMM_MESSAGES_DB", "")
+    messages = (
+        Messages(messages_path, token, push.sender if push else None) if messages_path else None
+    )
     if pairing and (len(token) > 4096 or any(not 33 <= ord(char) <= 126 for char in token)):
         raise ValueError("Pairing requires a token of at most 4096 printable ASCII characters")
     relay = Relay(
@@ -254,6 +262,7 @@ async def run(args):
         pairing=pairing,
         push=push,
         turn=turn_from_environment(),
+        messages=messages,
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -264,6 +273,9 @@ async def run(args):
         if push:
             push.start()
             stack.push_async_callback(push.close)
+        if messages:
+            messages.start()
+            stack.push_async_callback(messages.close)
         if pairing:
             await stack.enter_async_context(
                 admin_socket(

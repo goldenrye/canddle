@@ -3,6 +3,53 @@
 This guide does not provision or modify AWS resources automatically. Docker
 builds and deployment must be validated on your chosen EC2 OS and architecture.
 
+## Optional Private Messages
+
+Messaging is disabled by default. Upgrade the relay and both iPhones, then set
+`VPCOMM_MESSAGES_DATA_DIR` to an absolute, private persistent directory outside
+the repository. Create it with mode `0700`, owned by container UID/GID
+`10001:10001`. Include the mailbox overlay alongside all existing overlays:
+
+```sh
+docker compose -f compose.yaml -f deploy/compose.messages.yaml up -d --build
+```
+
+To retain background call ringing and add generic background message alerts,
+keep the existing Apple credentials and push overlay:
+
+```sh
+docker compose -f compose.yaml -f deploy/compose.push.yaml \
+  -f deploy/compose.messages.yaml up -d --build
+```
+
+Keep any WebRTC, port, and certificate overlays you already use in the same
+command. The message volume uses a separate mount from the push volume.
+No additional public port, paid messaging service, or third-party database is
+needed. Without APNs, messages queue and deliver when the recipient opens
+Canddle; there is no background message alert. Existing calls still work with
+messaging disabled.
+
+For non-Docker deployments, set `VPCOMM_MESSAGES_DB` to a writable private
+SQLite file path; its parent directory must already exist. Do not use the push
+database path. The relay stores ciphertext, signed key bundles, receipt and
+routing metadata, recipient allowlists, and normal APNs tokens. Records expire
+seven days after message creation and are removed on mailbox activity or the
+running relay's minute cleanup. Delivered ciphertext is removed when its signed
+receipt arrives. Backups/snapshots require their own retention policy. Rotating
+`VPCOMM_ACCESS_TOKEN` clears the message database namespace at the next startup.
+
+Limits: 256 device/scope key registrations, 4,096 retained message records, and
+200 pending records involving a sender or recipient. Full queues reject new
+messages without disconnecting calls. Device keys are stable and registrations
+are not automatically evicted; large deployments need a separate lifecycle
+design. Monitor private volume free space and keep SQLite off network filesystems.
+
+On each phone, open Canddle once, complete mutual device verification in a call,
+then open **Messages > Enable message notifications**. Both phones must use the
+same normalized relay URL. See [messaging setup and device checks](../iphone/MESSAGING.md)
+and the [security model](../SECURITY.md#private-text-messages) before enabling.
+No server or Apple account is changed by editing these repository files.
+
 ## 1. Prepare the Instance
 
 Use a small Linux EC2 instance initially, such as an Ubuntu instance with at
