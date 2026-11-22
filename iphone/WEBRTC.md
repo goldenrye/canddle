@@ -175,8 +175,8 @@ locked-screen CallKit/microphone continuity; test those on signed physical iPhon
 
 ## Self-Hosted TURN
 
-The Python relay issues two-hour coturn REST credentials after authenticated
-device registration. The shared TURN secret stays on the servers, never in the
+The Python relay issues 24-hour coturn REST credentials after authenticated
+device registration and re-issues them hourly while the device stays connected. The shared TURN secret stays on the servers, never in the
 app. Calls/signaling connections have no duration limit.
 
 Generate a separate random secret:

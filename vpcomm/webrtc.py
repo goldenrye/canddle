@@ -190,6 +190,9 @@ def log_quality(call, sender, links):
 class TURNConfig:
     urls: tuple[str, ...]
     secret: str
+    # coturn rejects refreshes once credentials expire, which would cut TURN-relayed
+    # calls short. Connected clients are re-issued fresh credentials hourly.
+    CREDENTIAL_SECONDS = 86400
 
     def __post_init__(self):
         if not 1 <= len(self.urls) <= 4 or len(self.secret) < 32:
@@ -202,7 +205,7 @@ class TURNConfig:
                 raise ValueError("Use TCP transport for TURN over TLS")
 
     def servers(self, identity, now=None):
-        expires = int(time.time() if now is None else now) + 7200
+        expires = int(time.time() if now is None else now) + self.CREDENTIAL_SECONDS
         username = f"{expires}:{hashlib.sha256(identity.encode()).hexdigest()[:16]}"
         credential = base64.b64encode(
             hmac.digest(self.secret.encode(), username.encode(), "sha1")

@@ -25,6 +25,7 @@ from .webrtc import (
 class GroupLobby(Lobby):
     MAX_MEMBERS = 6
     RESUME_SECONDS = 40
+    RTC_CONFIG_REFRESH_SECONDS = 3600
 
     def __init__(self, push=None, turn=None, messages=None, **kwargs):
         super().__init__(**kwargs)
@@ -47,6 +48,7 @@ class GroupLobby(Lobby):
         self.refresh_pending = {}
         self.refresh_times = {}
         self.refresh_timers = {}
+        self.rtc_config_timer = None
 
     def challenge(self, nonce):
         return {
@@ -127,9 +129,8 @@ class GroupLobby(Lobby):
 
     def connected_peer(self, peer):
         if peer.resumed:
-            peer.emit({
-                "type": "rtc-config", "servers": json.dumps(self.turn.servers(peer.identity))
-            })
+            self.send_rtc_config(peer)
+            self.schedule_rtc_config_refresh()
             peer.emit({**self.roster_messages[peer.joined], "type": "resume-state"})
             self.request_refresh(peer.joined)
         # Clients clear their offer directory before resume, so these are not duplicates.
@@ -182,8 +183,29 @@ class GroupLobby(Lobby):
         if self.presence_update:
             self.presence_update.cancel()
             self.presence_update = None
+        if self.rtc_config_timer:
+            self.rtc_config_timer.cancel()
+            self.rtc_config_timer = None
         self.presence_subscribers.clear()
         self.profile_cache.clear()
+
+    def send_rtc_config(self, peer):
+        peer.emit({"type": "rtc-config", "servers": json.dumps(self.turn.servers(peer.identity))})
+
+    def schedule_rtc_config_refresh(self):
+        if self.rtc_config_timer is None:
+            self.rtc_config_timer = asyncio.get_running_loop().call_later(
+                self.RTC_CONFIG_REFRESH_SECONDS, self.refresh_rtc_config
+            )
+
+    def refresh_rtc_config(self):
+        """Long-lived sessions must never start or recover a call with stale TURN credentials."""
+        self.rtc_config_timer = None
+        peers = [peer for peer in self.peers.values() if peer.webrtc and not peer.suspended]
+        for peer in peers:
+            self.send_rtc_config(peer)
+        if peers:
+            self.schedule_rtc_config_refresh()
 
     def request_refresh(self, call):
         timer = self.refresh_timers.pop(call, None)
@@ -448,9 +470,8 @@ class GroupLobby(Lobby):
                 raise ValueError("WebRTC unavailable")
             if not peer.webrtc:
                 peer.webrtc = True
-                peer.emit(
-                    {"type": "rtc-config", "servers": json.dumps(self.turn.servers(peer.identity))}
-                )
+                self.send_rtc_config(peer)
+                self.schedule_rtc_config_refresh()
                 for offer in self.offers.values():
                     if offer.message.get("media") == "webrtc" and self.visible_offer(offer, peer):
                         peer.emit(offer.message)

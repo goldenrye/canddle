@@ -14,6 +14,7 @@ from test_lobby import TOKEN, Device, recv, send
 from websockets.exceptions import ConnectionClosed
 
 from vpcomm.crypto import encode
+from vpcomm.group import GroupLobby
 from vpcomm.lobby import offer_fields, transcript
 from vpcomm.push import PushDevices, PushService
 from vpcomm.server import Relay, build_server
@@ -110,7 +111,7 @@ async def admit(a, alice, b, bob, direct=False):
 
 def test_turn_credentials_and_environment(monkeypatch):
     entry = TURN.servers("device", now=100)[0]
-    assert entry["username"] == "7300:" + hashlib.sha256(b"device").hexdigest()[:16]
+    assert entry["username"] == "86500:" + hashlib.sha256(b"device").hexdigest()[:16]
     assert (
         entry["credential"]
         == base64.b64encode(
@@ -577,3 +578,14 @@ async def test_trickle_flood_budget_also_covers_stale_updates():
         await send(a, candidate(alice, bob, {**membership, "revision": "0"}))
         with pytest.raises(ConnectionClosed):
             await a.recv()
+
+
+async def test_connected_webrtc_peers_get_fresh_turn_credentials(monkeypatch):
+    monkeypatch.setattr(GroupLobby, "RTC_CONFIG_REFRESH_SECONDS", 0.05)
+    async with server() as (group, url), client(url) as (a, _):
+        await enable(a)
+        first = json.loads((await recv(a, "rtc-config"))["servers"])[0]
+        second = json.loads((await recv(a, "rtc-config"))["servers"])[0]
+        assert first["urls"] == list(TURN.urls)
+        assert int(second["username"].split(":")[0]) >= int(first["username"].split(":")[0])
+    assert group.rtc_config_timer is None

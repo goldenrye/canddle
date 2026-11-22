@@ -223,7 +223,8 @@ the current relay connection and selected recipient; it does not change the
 saved WebRTC preference or switch an already-announced WebRTC call to PCM.
 
 Only authenticated clients receive temporary coturn REST credentials, valid for
-two hours (longer than the one-hour signaling/call limit). The shared secret is
+24 hours and re-issued hourly to connected clients, so a TURN-relayed call can
+last up to about a day before its relay allocation can no longer be refreshed. The shared secret is
 not sent to clients. The relay bearer token alone authorizes credential issuance:
 this is not a separately approved TURN-user list. Leaked temporary credentials
 can consume TURN service until expiry; configure allocation/bandwidth limits,
