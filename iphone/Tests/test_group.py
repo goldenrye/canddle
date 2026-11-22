@@ -49,6 +49,8 @@ TOKEN = "group-test-" + "a" * 40
         "rtc-mixed",
         "rtc-no-trickle",
         "rtc-no-recovery",
+        "rtc-setup-direct",
+        "rtc-setup-group",
         "rtc-handoff",
         "rtc-handoff-abort",
         "rtc-handoff-direct",

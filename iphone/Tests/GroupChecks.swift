@@ -906,6 +906,37 @@ struct GroupChecks {
         }
         precondition(changes == count - 1)
         try await wait { clients.prefix(count).allSatisfy { $0.members.count == count } }
+        if mode == "rtc-setup-direct" || mode == "rtc-setup-group" {
+            var ended = 0
+            for client in clients.prefix(count) {
+                client.onAudioEnded = { _ in ended += 1 }
+            }
+            // No SDP or audio has connected yet. Recover the setup itself, then
+            // change both signaling paths while the fresh epoch is still unused.
+            for stage in 0..<2 {
+                let previous = host.webRTCSession!.roster
+                if stage == 0 {
+                    precondition(receiver.recoverMedia())
+                    precondition(receiver.recoverMedia()) // Coalesced while awaiting the caller.
+                } else {
+                    host.networkChanged()
+                    receiver.networkChanged()
+                }
+                try await wait {
+                    clients.prefix(count).allSatisfy {
+                        $0.inCall && $0.online && !$0.recoveringMedia
+                            && ($0.webRTCSession?.roster.revision ?? 0) > previous.revision
+                    }
+                }
+                let fresh = host.webRTCSession!
+                precondition(fresh.roster.message["epoch"] != previous.message["epoch"])
+                precondition(fresh.roster.members.map(\.message) == previous.members.map(\.message))
+                precondition(clients.prefix(count).allSatisfy {
+                    $0.webRTCSignals.isEmpty && $0.webRTCCandidates.isEmpty
+                })
+                precondition(ended == 0)
+            }
+        }
         let session = host.webRTCSession!
         precondition(session.trickle == (mode != "rtc-no-trickle"))
         let signing = try Curve25519.Signing.PrivateKey(rawRepresentation: saved[0].secret)

@@ -104,8 +104,9 @@ struct LobbyView: View {
                                     CallMediaIndicator(quality: call.mediaQuality, connected: call.connected,
                                                        peer: member.id)
                                 } else {
-                                    Text(call.muted ? "Microphone muted"
-                                         : (call.connected ? "Microphone on" : "Preparing audio"))
+                                    Text(lobby.recoveringMedia ? "Reconnecting audio"
+                                         : (!call.connected ? "Connecting audio"
+                                            : (call.muted ? "Microphone muted" : "Microphone on")))
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             }

@@ -310,7 +310,12 @@ with unchanged membership. Existing signed roster authorization and fresh
 ICE/DTLS credentials are required; no uncertain SDP/candidate messages are replayed.
 Refresh requests are coalesced, spaced by two seconds, and capped at eight/minute.
 All timers/history are cleared on teardown. The client bounds signaling/epoch
-recovery to 30 seconds; subsequent media setup has a 25-second deadline.
+recovery to 30 seconds; each media setup attempt has a 25-second deadline.
+Media failure or setup timeout may request up to two fresh signed epochs even
+before audio first connects. Only a fully connected mesh resets this retry
+budget. An independent 90-second initial-media deadline survives epoch changes
+and signaling suspension, preventing endless setup through repeated refreshes.
+Authentication/SDP validation failures remain terminal, not retryable.
 Explicit offline hangup stops retries, though remote cleanup can await expiry.
 Recovery preserves CallKit/mute state, not ongoing media while membership is
 unknown. It is not host migration, readmission, or post-compromise recovery.

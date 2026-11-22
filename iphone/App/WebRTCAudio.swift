@@ -52,8 +52,8 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
     private var track: RTCAudioTrack?
     private var stopped = false
     private var muted = false
-    private var wasConnected = false
-    private var recoveryAttempts = 0
+    private var recovery = WebRTCConnectionRecovery()
+    private var setupDeadline: Task<Void, Never>?
     var onRecoveryNeeded: (() -> Bool)?
     var send: ((String, String, String, String) async throws -> Void)?
     var sendCandidate: ((String, String, String, String) async throws -> Void)?
@@ -111,6 +111,14 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         }
         track = Self.factory.audioTrack(withTrackId: "canddle-audio")
         try update(session)
+        // This deadline survives roster changes and signaling suspension.
+        // A moving phone must neither fail on its first lost route nor retry forever.
+        setupDeadline = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: WebRTCConnectionRecovery.setupSeconds * 1_000_000_000) }
+            catch { return }
+            guard let self, !self.stopped, !self.recovery.hasConnected else { return }
+            self.fail("Audio could not connect within 90 seconds. The network may be changing or unavailable. Try again when coverage improves.")
+        }
         RTCAudioSession.sharedInstance().isAudioEnabled = true
         sampler = Task { [weak self] in
             while !Task.isCancelled {
@@ -196,7 +204,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
             let link = Link(peer: member.id, connection: pc, sender: transceiver.sender,
                             continualGathering: next.trickle)
             links[member.id] = link
-            setDeadline(link, seconds: 25)
+            setDeadline(link, seconds: WebRTCConnectionRecovery.attemptSeconds)
             if next.identity < member.id {
                 link.negotiation = Task {
                     do {
@@ -208,7 +216,12 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                 }
             }
         }
-        if links.isEmpty { onConnected?(true) }
+        if links.isEmpty {
+            // A signed roster with only this caller has no pending media route.
+            recovery.connected()
+            setupDeadline?.cancel(); setupDeadline = nil
+            onConnected?(true)
+        }
         track.isEnabled = !muted
         RTCAudioSession.sharedInstance().isAudioEnabled = true
         reportProgress()
@@ -382,7 +395,9 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         guard !stopped, let link = links.values.sorted(by: { $0.peer < $1.peer }).first(where: {
             $0.connection.connectionState != .connected
         }) else { return }
-        onProgress?("Connecting WebRTC audio: \(progress(link).stage.status)")
+        let retry = recovery.attempts > 0
+            ? " (retry \(recovery.attempts)/\(WebRTCConnectionRecovery.maximumAttempts))" : ""
+        onProgress?("Connecting WebRTC audio\(retry): \(progress(link).stage.status)")
     }
 
     private func failConnection(_ link: Link) {
@@ -390,25 +405,24 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
                                     remoteSDP: link.connection.remoteDescription?.sdp))
     }
 
-    private func setDeadline(_ link: Link, seconds: UInt64, recover: Bool = false) {
+    private func setDeadline(_ link: Link, seconds: UInt64) {
         link.deadline?.cancel()
         link.deadline = Task {
             do {
                 try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                if current(link) {
-                    if recover { recoverConnection(link) }
-                    else { failConnection(link) }
+                if current(link), link.connection.connectionState != .connected {
+                    recoverConnection(link)
                 }
             } catch {}
         }
     }
 
     private func recoverConnection(_ link: Link) {
-        guard wasConnected, session?.recovery == true, recoveryAttempts < 2 else {
+        guard current(link) else { return }
+        guard recovery.request(supported: session?.recovery == true) else {
             failConnection(link)
             return
         }
-        recoveryAttempts += 1
         if onRecoveryNeeded?() != true { failConnection(link) }
     }
 
@@ -423,7 +437,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         case .connected:
             link.deadline?.cancel(); link.deadline = nil
         case .disconnected:
-            if link.deadline == nil { setDeadline(link, seconds: 8, recover: true) }
+            if link.deadline == nil { setDeadline(link, seconds: 8) }
         case .failed:
             recoverConnection(link)
             return
@@ -432,8 +446,8 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
         var connected = Set(links.values.filter { $0.connection.connectionState == .connected }.map(\.peer))
         if state != .connected { connected.remove(link.peer) }
         if !links.isEmpty && connected.count == links.count {
-            wasConnected = true
-            recoveryAttempts = 0
+            recovery.connected()
+            setupDeadline?.cancel(); setupDeadline = nil
         }
         onConnectedPeers?(connected)
         onConnected?(!links.isEmpty && connected.count == links.count)
@@ -478,6 +492,7 @@ final class WebRTCAudio: NSObject, RTCPeerConnectionDelegate {
 
     func stop() {
         stopped = true
+        setupDeadline?.cancel(); setupDeadline = nil
         sampler?.cancel(); sampler = nil
         track?.isEnabled = false
         closeLinks()

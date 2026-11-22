@@ -135,11 +135,22 @@ Legacy calls and older relays retain their previous disconnect behavior.
   replayed: the client verifies the last committed signed roster, then the caller
   signs a new revision/epoch. Every participant rebuilds ICE/DTLS links, preserving
   membership and refreshing credentials. This can briefly pause the whole group.
-- An established media link disconnected for eight seconds, or reporting failure,
-  also requests a fresh signed epoch. This is a full authenticated mesh rebuild,
+- An established media link disconnected for eight seconds, or a media link
+  reporting failure even before its first connection, requests a fresh signed
+  epoch. Expiry of a 25-second media setup attempt follows the same recovery path.
+  This is a full authenticated mesh rebuild,
   not an unsigned SDP renegotiation or a native `restartIce()` call.
-- Signaling/epoch recovery has a 30-second client deadline. New media links then
-  have the usual 25-second setup deadline. Repeated resume/refresh requests are
+- The app permits two media-triggered retries before failing. Only a fully
+  connected mesh resets that retry budget; new rosters do not. Initial setup has
+  a separate 90-second overall limit starting when the audio engine starts, which
+  survives roster changes and signaling suspension. Older relays without recovery
+  retain the single-attempt behavior. The status reports the setup stage and retry
+  number; the local participant no longer stays labeled "Preparing audio" during
+  route setup/recovery.
+- Signaling/epoch recovery still has a 30-second client deadline, and each new
+  media attempt has a 25-second deadline. The 90-second limit is an upper bound,
+  not a guarantee of waiting that long: retry exhaustion, signaling failure, and
+  authentication failures may end the call sooner. Repeated resume/refresh requests are
   bounded to eight per minute; refreshes are at least two seconds apart.
 - Explicit hangup, removal, protocol/authentication failure, relay restart, and
   prolonged loss remain terminal. Hangup while completely offline stops local
@@ -148,7 +159,9 @@ Legacy calls and older relays retain their previous disconnect behavior.
 
 Expect a brief audio gap, not guaranteed seamless speech. Local native integration
 tests cover caller/recipient/simultaneous handoffs, abrupt socket loss, fresh
-signaling budgets, and hangup. They do not simulate cellular radios or prove
+signaling budgets, and hangup, including private/group refresh and simultaneous
+socket handoff before the first SDP exchange. Pure Swift checks exercise the
+initial and established retry budget. They do not simulate cellular radios or prove
 locked-screen CallKit/microphone continuity; test those on signed physical iPhones.
 
 ## Self-Hosted TURN
@@ -362,6 +375,11 @@ Before rollout, test on two signed iPhones:
 - Switch Wi-Fi off/on during a call, on the caller and recipient separately and
   together, including while locked. Confirm the same CallKit call survives,
   two-way audio returns, and a muted microphone stays muted after recovery.
+- Repeat the switch just after answering, before audio first connects. Confirm
+  setup retries in the same call, stale-epoch signals are rejected, and the call
+  ends within its bounded setup window if no route is available. Test actual
+  train Wi-Fi/cellular coverage gaps: retries cannot repair an unreachable TURN
+  server, blocked media ports, or prolonged absence of internet access.
 - Cancel during negotiation, hang up from either side (including while offline),
   block recovery beyond its deadline, and deny microphone permission. Confirm
   teardown, no automatic readmission, and no lingering microphone.

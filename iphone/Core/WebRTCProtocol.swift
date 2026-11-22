@@ -47,6 +47,27 @@ struct WebRTCSession {
     var recovery = false
 }
 
+/// Shared by initial setup and established media loss. New rosters do not reset
+/// the budget; only a fully connected mesh does, so repeated epochs stay bounded.
+struct WebRTCConnectionRecovery {
+    static let attemptSeconds: UInt64 = 25
+    static let setupSeconds: UInt64 = 90
+    static let maximumAttempts = 2
+    private(set) var attempts = 0
+    private(set) var hasConnected = false
+
+    mutating func request(supported: Bool) -> Bool {
+        guard supported, attempts < Self.maximumAttempts else { return false }
+        attempts += 1
+        return true
+    }
+
+    mutating func connected() {
+        hasConnected = true
+        attempts = 0
+    }
+}
+
 enum WebRTCSetupStage: String {
     case waitingForOffer = "RTC_WAIT_OFFER"
     case applyingRemote = "RTC_REMOTE_SDP"

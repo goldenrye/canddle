@@ -88,6 +88,20 @@ struct ProtocolChecks {
     }
 
     static func webRTCSetupChecks() {
+        var recovery = WebRTCConnectionRecovery()
+        precondition(!recovery.hasConnected)
+        precondition(!recovery.request(supported: false) && recovery.attempts == 0)
+        // Initial ICE failure must be retryable without ever reaching connected.
+        precondition(recovery.request(supported: true) && recovery.attempts == 1)
+        precondition(recovery.request(supported: true) && recovery.attempts == 2)
+        precondition(!recovery.request(supported: true) && !recovery.hasConnected)
+        recovery.connected()
+        precondition(recovery.hasConnected && recovery.attempts == 0)
+        precondition(recovery.request(supported: true))
+        precondition(recovery.request(supported: true))
+        precondition(!recovery.request(supported: true))
+        precondition(WebRTCConnectionRecovery.setupSeconds == 90)
+        precondition(WebRTCConnectionRecovery.attemptSeconds == 25)
         let cases: [(Bool, Bool, Bool, Bool, Bool, Bool, WebRTCSetupStage)] = [
             (false, false, false, false, false, false, .waitingForOffer),
             (false, false, false, true, false, false, .applyingRemote),
