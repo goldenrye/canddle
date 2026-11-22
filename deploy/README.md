@@ -319,8 +319,9 @@ command: ["vpcomm-server", "--host", "0.0.0.0", "--max-connections", "8",
 ```
 
 Manual rooms permit two participants and close when one leaves; group v2 permits
-six and stays open until the caller leaves or its session expires. The command's
-wait/call timeout flags apply to manual rooms; group limits are described above.
+six and stays open until the caller leaves. Calls have no duration limit by
+default; the command's `--call-timeout` (seconds) sets one for manual rooms only.
+The wait timeout also applies only to manual rooms.
 Relay state is in memory, so run **one replica**. Multiple replicas need
 explicit room routing; adding replicas blindly can separate participants.
 

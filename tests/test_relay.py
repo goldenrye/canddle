@@ -347,3 +347,11 @@ async def test_tls_untrusted_rejected_and_private_ca_audio_succeeds(tmp_path):
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         assert alice.closed and bob.closed
+
+
+def test_calls_have_no_default_duration_limit():
+    from vpcomm.group import GroupLobby
+    from vpcomm.server import Relay
+
+    assert Relay("x" * 32).call_timeout is None
+    assert GroupLobby().session_lifetime is None

@@ -111,7 +111,8 @@ class Offer:
 
 
 class Lobby:
-    def __init__(self, lifetime=120, session_lifetime=3600):
+    def __init__(self, lifetime=120, session_lifetime=None):
+        # session_lifetime=None: connected sessions and accepted calls have no time limit.
         self.peers: dict[str, Peer] = {}
         self.offers: dict[str, Offer] = {}
         self.lifetime = lifetime

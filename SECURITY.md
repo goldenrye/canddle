@@ -432,8 +432,8 @@ Lobby sockets share the server connection cap with audio. Each device has at mos
 one offer or outgoing request; each offer holds at most 16 requests. Outbound
 queues hold 64 messages and slow peers are disconnected. Sends have three-second
 deadlines; incoming messages have a 12-message burst / 2-per-second refill.
-Client heartbeats run every 15 seconds, server inactivity limit is 45 seconds,
-and sessions end after one hour. These are resource bounds, not DDoS protection.
+Client heartbeats run every 15 seconds, server inactivity limit is 45 seconds;
+sessions and calls have no duration limit. These are resource bounds, not DDoS protection.
 
 The relay sees stable public device keys, names, availability, request/approval
 timing, and encrypted invitation boxes. Every connected lobby client sees call

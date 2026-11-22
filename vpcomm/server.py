@@ -44,7 +44,7 @@ class Relay:
         *,
         max_connections: int = 32,
         wait_timeout: float = 120,
-        call_timeout: float = 3600,
+        call_timeout: float | None = None,
         pairing: PairingCodes | None = None,
         push=None,
         turn=None,
@@ -52,7 +52,11 @@ class Relay:
     ):
         if len(access_token) < 32 or not access_token.isascii():
             raise ValueError("Access token must be at least 32 ASCII characters")
-        if max_connections < 2 or wait_timeout <= 0 or call_timeout <= 0:
+        if (
+            max_connections < 2
+            or wait_timeout <= 0
+            or (call_timeout is not None and call_timeout <= 0)
+        ):
             raise ValueError("Invalid relay limits")
         self.access_token = access_token
         self.max_connections = max_connections
@@ -258,7 +262,7 @@ async def run(args):
         token,
         max_connections=args.max_connections,
         wait_timeout=args.wait_timeout,
-        call_timeout=args.call_timeout,
+        call_timeout=args.call_timeout or None,
         pairing=pairing,
         push=push,
         turn=turn_from_environment(),
@@ -297,7 +301,9 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--max-connections", type=int, default=32)
     parser.add_argument("--wait-timeout", type=float, default=120)
-    parser.add_argument("--call-timeout", type=float, default=3600)
+    parser.add_argument(
+        "--call-timeout", type=float, default=0, help="seconds; 0 means no call duration limit"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     # Redacted, client-reported call quality (no addresses, SDP or audio).

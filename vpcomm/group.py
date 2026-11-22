@@ -648,9 +648,11 @@ class GroupLobby(Lobby):
             self.paused.discard(call)
         if revision == 1:
             offer.expiry.cancel()
-            offer.expiry = asyncio.get_running_loop().call_later(
-                self.session_lifetime, self.close_offer, call, "expired"
-            )
+            offer.expiry = None
+            if self.session_lifetime is not None:
+                offer.expiry = asyncio.get_running_loop().call_later(
+                    self.session_lifetime, self.close_offer, call, "expired"
+                )
 
     def rtc_signal(self, peer, message):
         if set(message) != {
