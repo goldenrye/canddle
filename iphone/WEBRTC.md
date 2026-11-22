@@ -135,6 +135,15 @@ Legacy calls and older relays retain their previous disconnect behavior.
   replayed: the client verifies the last committed signed roster, then the caller
   signs a new revision/epoch. Every participant rebuilds ICE/DTLS links, preserving
   membership and refreshing credentials. This can briefly pause the whole group.
+- This also covers loss of the first roster response after the relay committed
+  admission. The caller retains its exact signed proposal; a recipient retains
+  its confirmed signed join request. Neither a pending request nor a recovered
+  snapshot starts audio: server-committed membership and a fresh signed epoch
+  are still required. Existing CallKit admission timeouts can end setup sooner.
+- Retiring an old media epoch does not close the shared signaling socket when
+  canceling an SDP/candidate send. An already-submitted write drains within its
+  existing three-second deadline; stale epochs are discarded, never replayed.
+  A stalled write still closes the transport through normal network recovery.
 - An established media link disconnected for eight seconds, or a media link
   reporting failure even before its first connection, requests a fresh signed
   epoch. Expiry of a 25-second media setup attempt follows the same recovery path.

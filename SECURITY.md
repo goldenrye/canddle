@@ -304,10 +304,22 @@ replaces the previous socket and returns the committed caller-signed roster as
 original signed admission. The caller accepts only its prior roster or exact
 outstanding proposal. This snapshot alone cannot restart audio.
 
+A socket can fail after the relay commits admission but before the phone receives
+its first roster. A caller with an outstanding signed proposal or a recipient
+with a confirmed signed join request may attempt resume in this state. The relay
+still rejects uncommitted membership. With no prior local roster, the caller must
+match its exact proposal and the recipient must find its exact signed request in
+the verified snapshot. Local admission/audio remains gated on the next fresh
+caller-signed epoch; no request is automatically readmitted.
+
 The relay asks the caller for `rtc-refresh`; an admitted member may also request
 it for the current call/revision/epoch. The caller signs a fresh roster revision
 with unchanged membership. Existing signed roster authorization and fresh
 ICE/DTLS credentials are required; no uncertain SDP/candidate messages are replayed.
+Canceling a retired media link's pending signaling write does not cancel the shared
+relay. The write drains under its original three-second deadline, after which a
+stalled transport fails recoverably. Late old-epoch frames remain filtered by the
+relay and receiving clients. Canceling the receive-loop owner still closes the socket.
 Refresh requests are coalesced, spaced by two seconds, and capped at eight/minute.
 All timers/history are cleared on teardown. The client bounds signaling/epoch
 recovery to 30 seconds; each media setup attempt has a 25-second deadline.

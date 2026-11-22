@@ -72,6 +72,11 @@ struct GroupChecks {
             let root = try input.root.flatMap { Data(base64Encoded: $0) }.map { try RelaySettings.certificate($0) }
             let settings = try RelaySettings(address: input.address, token: input.token,
                 root: root, testLoopback: true)
+            if input.mode == "relay-cancellation" {
+                try await relayCancellationChecks(settings)
+                print("PASS group \(input.mode)")
+                return
+            }
             var saved = (0..<7).map { _ in
                 LobbyIdentity(secret: Curve25519.Signing.PrivateKey().rawRepresentation, trusted: [:])
             }
@@ -891,6 +896,17 @@ struct GroupChecks {
         try rejects { _ = try LobbyOffer(stripped) }
         var changes = 0
         host.onWebRTCSessionChanged = { if $0 != nil { changes += 1 } }
+        let admissionLoss = mode.hasPrefix("rtc-admission-")
+        let admissionFailure = admissionLoss && (mode.hasSuffix("untrusted") || mode.hasSuffix("uncommitted"))
+        let affected = mode.contains("caller") ? host : (mode.contains("late") ? clients[2] : receiver)
+        var admissions = 0, suspendedBeforeAdmission = 0
+        affected.onAudioReady = { admissions += 1 }
+        affected.onMediaSuspended = {
+            if !affected.inCall {
+                suspendedBeforeAdmission += 1
+                precondition(affected.webRTCSession == nil)
+            }
+        }
         let count = mode.contains("direct") ? 2 : 6
         for index in 1..<count {
             let client = clients[index]
@@ -902,9 +918,34 @@ struct GroupChecks {
             client.confirmCaller()
             try await wait { host.candidates[0].confirmed && !host.sending }
             host.approve(host.candidates[0])
-            try await wait { client.inCall && host.members.count == index + 1 && !host.sending }
+            if admissionLoss && mode.hasSuffix("gated") {
+                try await wait { suspendedBeforeAdmission > 0 && affected.online }
+                // The fixture returns a valid snapshot but withholds the new epoch.
+                try await Task.sleep(nanoseconds: 100_000_000)
+                precondition(affected.active && affected.recoveringMedia && !affected.inCall)
+                precondition(affected.webRTCSession == nil && admissions == 0)
+                affected.disconnect()
+                precondition(!affected.active && !affected.reconnecting)
+                return
+            }
+            if admissionFailure {
+                try await wait { !affected.active }
+                precondition(!affected.inCall && affected.webRTCSession == nil && admissions == 0)
+                precondition(suspendedBeforeAdmission > 0, "Must attempt recovery, then reject invalid admission")
+                return
+            }
+            try await wait {
+                client.inCall && host.inCall && host.members.count == index + 1
+                    && !host.sending && !host.recoveringMedia && !client.recoveringMedia
+            }
         }
-        precondition(changes == count - 1)
+        if admissionLoss {
+            precondition(admissions == 1 && suspendedBeforeAdmission > 0)
+            precondition(changes == count - 1 + (mode.contains("caller") || mode.contains("both") ? 0 : 1))
+            precondition(host.webRTCSession!.roster.revision == UInt64(count))
+        } else {
+            precondition(changes == count - 1)
+        }
         try await wait { clients.prefix(count).allSatisfy { $0.members.count == count } }
         if mode == "rtc-setup-direct" || mode == "rtc-setup-group" {
             var ended = 0
@@ -1127,6 +1168,77 @@ struct GroupChecks {
         for value in 1...20 { try mixer.push(pcm(UInt16(value)), from: "replacement") }
         precondition(mixer.droppedFrames == 12)
         for value in 13...20 { precondition(mixer.mix() == pcm(UInt16(value))) }
+    }
+
+    @MainActor static func relayCancellationChecks(_ settings: RelaySettings) async throws {
+        let relay = Relay(settings)
+        defer { relay.stop() }
+        var finishRead: (@Sendable (Result<Int, Error>) -> Void)?
+        var finishSend: (@Sendable (Result<Int, Error>) -> Void)?
+        let reader = Task { try await relay.bounded(1) { finishRead = $0 } }
+        let sender = Task {
+            try await relay.bounded(1, stopOnCancellation: false) { finishSend = $0 }
+        }
+        try await wait { finishRead != nil && finishSend != nil }
+        sender.cancel()
+        // Let the queued cancellation handler run before delivering either result.
+        await Task.yield()
+        finishRead?(.success(7))
+        let received = try await reader.value
+        precondition(received == 7)
+        finishSend?(.success(8))
+        do { _ = try await sender.value; preconditionFailure("Canceled send succeeded") }
+        catch is CancellationError {}
+        let next: Int = try await relay.bounded(1) { $0(.success(9)) }
+        precondition(next == 9, "Retiring a media send must leave the relay usable")
+
+        var started = false
+        let canceled = Task {
+            try await relay.bounded(1, stopOnCancellation: false) { (done: @Sendable (Result<Int, Error>) -> Void) in
+                started = true
+                done(.success(0))
+            }
+        }
+        canceled.cancel()
+        do { _ = try await canceled.value; preconditionFailure("Canceled send started") }
+        catch is CancellationError {}
+        precondition(!started)
+
+        // Canceling a send must not disable its transport deadline.
+        var stalled = false
+        let timeout = Task {
+            try await relay.bounded(0.05, stopOnCancellation: false) { (_: @Sendable (Result<Int, Error>) -> Void) in
+                stalled = true
+            }
+        }
+        try await wait { stalled }
+        timeout.cancel()
+        do { _ = try await timeout.value; preconditionFailure("Stalled send did not time out") }
+        catch VoiceError.timeout {}
+        precondition(relay.canRecover(VoiceError.timeout))
+        do {
+            let _: Int = try await relay.bounded(1) { $0(.success(1)) }
+            preconditionFailure("Timed-out relay remained open")
+        } catch VoiceError.ended {}
+
+        // The receive-loop owner still closes the transport on cancellation.
+        let owned = Relay(settings)
+        defer { owned.stop() }
+        var reading = false, sending = false
+        let read = Task {
+            try await owned.bounded(1) { (_: @Sendable (Result<Int, Error>) -> Void) in reading = true }
+        }
+        let send = Task {
+            try await owned.bounded(1, stopOnCancellation: false) { (_: @Sendable (Result<Int, Error>) -> Void) in
+                sending = true
+            }
+        }
+        try await wait { reading && sending }
+        read.cancel()
+        for task in [read, send] {
+            do { _ = try await task.value; preconditionFailure("Transport owner cancellation was ignored") }
+            catch is CancellationError {}
+        }
     }
 
     static func rejects(_ operation: () throws -> Void) throws {

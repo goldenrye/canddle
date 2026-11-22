@@ -298,7 +298,9 @@ final class Relay {
         let data = try JSONEncoder().encode(message)
         let limit = message["type"] == "rtc-signal" ? WebRTCSignal.maximumSize : 8192
         guard data.count <= limit else { throw VoiceError.packet }
-        try await send(.string(String(decoding: data, as: UTF8.self)))
+        let mediaSignal = message["type"] == "rtc-signal" || message["type"] == "rtc-candidate"
+        try await send(.string(String(decoding: data, as: UTF8.self)),
+                       stopOnCancellation: !mediaSignal)
     }
 
     func groupMedia(_ data: Data) async throws {
@@ -366,8 +368,9 @@ final class Relay {
         return result
     }
 
-    private func send(_ message: URLSessionWebSocketTask.Message, seconds: Double = 3) async throws {
-        try await bounded(seconds) { complete in
+    private func send(_ message: URLSessionWebSocketTask.Message, seconds: Double = 3,
+                      stopOnCancellation: Bool = true) async throws {
+        try await bounded(seconds, stopOnCancellation: stopOnCancellation) { complete in
             self.socket.send(message) { error in
                 complete(error.map { .failure($0) } ?? .success(()))
             }
@@ -378,12 +381,13 @@ final class Relay {
         try await bounded(seconds) { self.socket.receive(completionHandler: $0) }
     }
 
-    private func bounded<T>(
-        _ seconds: Double, start: (@escaping @Sendable (Result<T, Error>) -> Void) -> Void
+    func bounded<T>(
+        _ seconds: Double, stopOnCancellation: Bool = true,
+        start: (@escaping @Sendable (Result<T, Error>) -> Void) -> Void
     ) async throws -> T {
         guard !ended else { throw VoiceError.ended }
         let id = UUID()
-        return try await withTaskCancellationHandler {
+        let result: T = try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
                 // Own the continuation: cancellation during a TLS challenge doesn't
@@ -405,8 +409,15 @@ final class Relay {
                 }
             }
         } onCancel: {
-            Task { @MainActor in self.stop(CancellationError()) }
+            // Retired media links do not own this shared socket. An already
+            // submitted write drains under its original deadline; signed epochs
+            // make late delivery harmless, and the frame is never replayed.
+            if stopOnCancellation {
+                Task { @MainActor in self.stop(CancellationError()) }
+            }
         }
+        try Task.checkCancellation()
+        return result
     }
 
     func canRecover(_ error: Error) -> Bool {

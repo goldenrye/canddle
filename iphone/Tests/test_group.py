@@ -6,6 +6,7 @@ import os
 import pytest
 from test_interop import tls_fixture
 
+from vpcomm.lobby import Peer
 from vpcomm.server import Relay, build_server
 from vpcomm.webrtc import TURNConfig
 
@@ -51,6 +52,17 @@ TOKEN = "group-test-" + "a" * 40
         "rtc-no-recovery",
         "rtc-setup-direct",
         "rtc-setup-group",
+        "relay-cancellation",
+        "rtc-admission-direct-caller",
+        "rtc-admission-direct-recipient",
+        "rtc-admission-direct-both",
+        "rtc-admission-group-late",
+        "rtc-admission-direct-caller-untrusted",
+        "rtc-admission-direct-recipient-untrusted",
+        "rtc-admission-direct-caller-uncommitted",
+        "rtc-admission-direct-recipient-uncommitted",
+        "rtc-admission-direct-caller-gated",
+        "rtc-admission-direct-recipient-gated",
         "rtc-handoff",
         "rtc-handoff-abort",
         "rtc-handoff-direct",
@@ -72,13 +84,76 @@ TOKEN = "group-test-" + "a" * 40
         "callback-old",
     ],
 )
-async def test_native_group(mode, tmp_path):
+async def test_native_group(mode, tmp_path, monkeypatch):
     turn = (
         TURNConfig(("turn:turn.example:3478",), "test-only-secret-" * 3)
         if mode.startswith("rtc-") and not mode.startswith("rtc-legacy-")
         else None
     )
     relay = Relay(TOKEN, turn=turn)
+    dropped = set()
+    committed = []
+    resumes = []
+    if mode.startswith("rtc-admission-"):
+        original_register = relay.group.register_peer
+
+        def register(socket, hello, challenge):
+            if hello.get("type") == "resume":
+                resumes.append(hello["identity"])
+            return original_register(socket, hello, challenge)
+
+        relay.group.register_peer = register
+        if mode.endswith("uncommitted"):
+            def uncommitted_roster(peer, message):
+                affected = peer
+                if "recipient" in mode:
+                    offer = relay.group.offers[message["call"]]
+                    affected = next(iter(offer.requests.values()))[0]
+                dropped.add(affected.identity)
+                committed.append(relay.group.recoverable_call(affected))
+                affected.socket.transport.abort()
+
+            relay.group.roster = uncommitted_roster
+        else:
+            original_emit = Peer.emit
+
+            def emit(peer, message):
+                caller = peer.offer == message.get("call") if isinstance(message, dict) else False
+                selected = (
+                    "both" in mode
+                    or ("caller" in mode and caller)
+                    or ("recipient" in mode and not caller)
+                    or ("late" in mode and peer.name == "Phone 2")
+                )
+                if (
+                    selected and peer.identity not in dropped and isinstance(message, dict)
+                    and message.get("type") == "roster"
+                    and message.get("revision") == ("2" if "late" in mode else "1")
+                ):
+                    dropped.add(peer.identity)
+
+                    def drop():
+                        committed.append(relay.group.recoverable_call(peer))
+                        peer.socket.transport.abort()
+
+                    # Roster handling commits synchronously before this callback.
+                    asyncio.get_running_loop().call_soon(drop)
+                    return
+                original_emit(peer, message)
+
+            monkeypatch.setattr(Peer, "emit", emit)
+        if mode.endswith("untrusted"):
+            original_connected = relay.group.connected_peer
+
+            def invalid_first_snapshot(peer):
+                if peer.resumed:
+                    stored = relay.group.roster_messages[peer.joined]
+                    relay.group.roster_messages[peer.joined] = {**stored, "signature": "invalid"}
+                original_connected(peer)
+
+            relay.group.connected_peer = invalid_first_snapshot
+        if mode.endswith("gated"):
+            relay.group.request_refresh = lambda call: None
     if mode == "callback-old":
         original_challenge = relay.group.challenge
         relay.group.challenge = lambda nonce: {
@@ -187,3 +262,7 @@ async def test_native_group(mode, tmp_path):
     assert not relay.group.offers
     assert not relay.group.members
     assert not relay.group.request_timers
+    if mode.startswith("rtc-admission-"):
+        assert len(dropped) == (2 if "both" in mode else 1)
+        assert committed == [not mode.endswith("uncommitted")] * len(dropped)
+        assert set(resumes) == dropped

@@ -346,15 +346,24 @@ final class GroupStore: ObservableObject {
         needsMediaRefresh = false
     }
 
+    private var canResumeCall: Bool {
+        // A committed first roster can be lost with the socket. These local
+        // proofs permit a resume attempt, not admission: the relay must already
+        // have committed membership, and its signed snapshot is checked below.
+        inCall || (ownOffer != nil
+            ? proposed != nil || roster != nil
+            : joining != nil && confirmed)
+    }
+
     /// Called by the system path monitor, not by periodic UI refresh.
     func networkChanged() {
-        guard inCall, usesWebRTC, let transport else { return }
+        guard canResumeCall, usesWebRTC, let transport else { return }
         if !reconnecting { _ = recoverConnection(transport, error: VoiceError.timeout, networkChange: true) }
     }
 
     @discardableResult
     private func recoverConnection(_ failed: Relay, error: Error, networkChange: Bool = false) -> Bool {
-        guard transport === failed, inCall, usesWebRTC, recoverySupported,
+        guard transport === failed, canResumeCall, usesWebRTC, recoverySupported,
               let token = resumeToken, let settings = connectionSettings, let signing,
               let call = (ownOffer ?? joining?.offer)?.id,
               networkChange || failed.canRecover(error) else { return false }
@@ -840,14 +849,17 @@ final class GroupStore: ObservableObject {
             guard resumeToken == nil || resumeToken == token else { throw VoiceError.peer }
             resumeToken = token
         case "resume-state":
-            guard reconnecting, awaitingResumeState, let offer = ownOffer ?? joining?.offer,
-                  let previous = roster else { throw VoiceError.peer }
+            guard reconnecting, awaitingResumeState, let offer = ownOffer ?? joining?.offer else {
+                throw VoiceError.peer
+            }
             var signed = message
             signed["type"] = "roster"
             let next = try GroupRoster(signed, offer: offer)
-            guard next.revision >= previous.revision else { throw VoiceError.order }
+            if let previous = roster {
+                guard next.revision >= previous.revision else { throw VoiceError.order }
+            }
             if ownOffer != nil {
-                guard next.message == previous.message || next.message == proposed?.message else {
+                guard next.message == roster?.message || next.message == proposed?.message else {
                     throw VoiceError.peer
                 }
             } else {
