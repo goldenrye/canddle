@@ -44,6 +44,8 @@ async def test_native_private_messaging_and_call_coexistence(tmp_path, enabled):
             rows = messages.db.execute("SELECT envelope, receipt FROM chat_messages").fetchall()
             assert len(rows) == 2
             assert all(envelope is None and receipt for envelope, receipt in rows)
+            badges = messages.db.execute("SELECT count FROM chat_badges ORDER BY count").fetchall()
+            assert badges == [(0,), (2,)]  # Sender has none; recipient has two unread.
     finally:
         if messages:
             await messages.close()

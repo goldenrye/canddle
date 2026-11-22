@@ -210,7 +210,8 @@ def test_bounded_chat_queue_does_not_overflow_call_signaling(setup):
     assert store.db.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 1
 
 
-async def test_alert_push_uses_regular_topic_and_contains_no_message_text():
+@pytest.mark.parametrize("badge", [None, 0, 5])
+async def test_alert_push_uses_regular_topic_and_contains_no_message_text(badge):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -222,13 +223,16 @@ async def test_alert_push_uses_regular_topic_and_contains_no_message_text():
     client = SimpleNamespace(post=AsyncMock(return_value=SimpleNamespace(status_code=200)))
     apns = APNs(key, "A" * 10, "B" * 10, "com.jpi.canddle", client)
     assert await apns.send_message(
-        PushDevice("recipient", "a" * 64, "production", SCOPE, time.time())
+        PushDevice("recipient", "a" * 64, "production", SCOPE, time.time()), badge=badge
     )
     kwargs = client.post.call_args.kwargs
     assert kwargs["headers"]["apns-push-type"] == "alert"
     assert kwargs["headers"]["apns-topic"] == "com.jpi.canddle"
     assert set(kwargs["json"]) == {"aps", "canddle_message"}
-    assert "badge" not in kwargs["json"]["aps"]
+    if badge is None:
+        assert "badge" not in kwargs["json"]["aps"]
+    else:
+        assert kwargs["json"]["aps"]["badge"] == badge
     assert "offer" not in kwargs["json"]
 
 
@@ -394,3 +398,110 @@ async def test_signed_control_revokes_message_alerts_without_lobby_session(setup
         "SELECT token FROM chat_keys WHERE identity=?", (alice.identity,)
     ).fetchone()[0]
     assert token == ("c" * 64 if tampered else "")
+
+
+def badge_frame(count, receipts=()):
+    return {"type": "chat-badge", "count": str(count), "receipts": json.dumps(receipts)}
+
+
+def test_badge_combines_local_and_pending_without_counting_receipts_twice(setup):
+    store, (alice, bob, _), peers = setup
+    a, b = peers[alice.identity], peers[bob.identity]
+    assert store.badge_count(SCOPE, bob.identity) is None
+    store.dispatch(a, badge_frame(9), peers)
+    store.dispatch(b, badge_frame(2), peers)  # Two existing missed calls.
+    message = envelope(alice, bob)
+    store.dispatch(a, message, peers)
+    store.dispatch(a, message, peers)
+    assert store.badge_count(SCOPE, bob.identity) == 3
+    assert store.badge_count(SCOPE, alice.identity) == 9
+    signed = receipt(bob, message)
+    store.dispatch(b, badge_frame(3, [signed]), peers)  # Saved, but still unread.
+    assert store.badge_count(SCOPE, bob.identity) == 3
+    assert store.db.execute("SELECT envelope FROM chat_messages").fetchone()[0] is None
+    store.dispatch(b, badge_frame(3, [signed]), peers)
+    assert store.badge_count(SCOPE, bob.identity) == 3
+    store.dispatch(b, badge_frame(2), peers)  # Read message, retain missed calls.
+    assert store.badge_count(SCOPE, bob.identity) == 2
+    store.dispatch(b, badge_frame(0), peers)
+    assert store.badge_count(SCOPE, bob.identity) == 0
+    assert store.badge_count("wss://another.example/relay", bob.identity) is None
+    store.dispatch(b, bundle(bob), peers)  # A downgraded app may not opt back in.
+    assert store.badge_count(SCOPE, bob.identity) is None
+
+
+@pytest.mark.parametrize("count", ["-1", "1129", "01", "1.5", "nan", "true"])
+def test_invalid_badge_count_does_not_change_state_or_abort_calls(setup, count):
+    store, (_, bob, _), peers = setup
+    b = peers[bob.identity]
+    store.dispatch(b, badge_frame(2), peers)
+    store.dispatch(b, badge_frame(count), peers)
+    assert output(b)[0]["type"] == "chat-error"
+    assert store.badge_count(SCOPE, bob.identity) == 2
+    b.socket.transport.abort.assert_not_called()
+
+
+def test_badge_receipt_batch_is_validated_before_any_mutation(setup):
+    store, (alice, bob, eve), peers = setup
+    a, b = peers[alice.identity], peers[bob.identity]
+    messages = [envelope(alice, bob) for _ in range(2)]
+    for message in messages:
+        store.dispatch(a, message, peers)
+    output(a)
+    output(b)
+    store.dispatch(b, badge_frame(1), peers)
+    store.dispatch(b, badge_frame(3, [receipt(bob, messages[0]), receipt(eve, messages[1])]), peers)
+    assert output(b)[0]["type"] == "chat-error"
+    assert output(a) == []
+    assert store.badge_count(SCOPE, bob.identity) == 3
+    assert (
+        store.db.execute(
+            "SELECT COUNT(*) FROM chat_messages WHERE envelope IS NOT NULL"
+        ).fetchone()[0]
+        == 2
+    )
+    store.dispatch(b, badge_frame(0, [{}] * 33), peers)
+    assert output(b)[0]["type"] == "chat-error"
+
+
+def test_badge_persists_migrates_and_resets_with_namespace(setup):
+    store, (_, bob, _), peers = setup
+    path = store.db.execute("PRAGMA database_list").fetchone()[2]
+    store.dispatch(peers[bob.identity], badge_frame(4), peers)
+    reopened = Messages(path, TOKEN)
+    assert reopened.badge_count(SCOPE, bob.identity) == 4
+    reopened.db.execute("DROP TABLE chat_badges")  # Simulate the pre-badge schema.
+    reopened.db.commit()
+    reopened.db.close()
+    migrated = Messages(path, TOKEN)
+    assert migrated.badge_count(SCOPE, bob.identity) is None
+    assert migrated.key(SCOPE, bob.identity)[0] == bundle(bob)
+    migrated.dispatch(peers[bob.identity], badge_frame(4), peers)
+    migrated.db.close()
+    rotated = Messages(path, TOKEN + "new")
+    assert rotated.badge_count(SCOPE, bob.identity) is None
+    rotated.db.close()
+
+
+async def test_background_push_includes_combined_badge_and_excludes_expired_queue(setup):
+    import asyncio
+
+    store, (alice, bob, _), peers = setup
+    a, b = peers[alice.identity], peers[bob.identity]
+    store.sender = SimpleNamespace(send_message=AsyncMock(return_value=True))
+    store.dispatch(b, badge_frame(2), peers)
+    store.dispatch(b, {"type": "chat-push", "token": "d" * 64, "environment": "production"}, peers)
+    expired = envelope(alice, bob)
+    store.dispatch(a, expired, peers)
+    store.db.execute(
+        "UPDATE chat_messages SET created=? WHERE id=?", (time.time() - TTL - 10, expired["id"])
+    )
+    store.db.commit()
+    store.dispatch(a, envelope(alice, bob), peers)
+    store.start()
+    try:
+        await asyncio.wait_for(store.queue.join(), 3)
+        store.sender.send_message.assert_awaited_once()
+        assert store.sender.send_message.call_args.kwargs["badge"] == 3
+    finally:
+        await store.close()

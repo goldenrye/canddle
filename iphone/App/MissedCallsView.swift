@@ -8,8 +8,10 @@ final class CallBadgeStore: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var requesting = false
     private let history: MissedCallStore
+    private let messages: MessageStore
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private lazy var synchronizer = MissedCallBadgeSync(history: history, write: { count, updates in
+    private lazy var synchronizer = MissedCallBadgeSync(history: history,
+        additionalCount: { [weak self] in self?.messages.unreadCount ?? 0 }, write: { count, updates in
         let center = UNUserNotificationCenter.current()
         let pending = await center.pendingNotificationRequests()
         center.removePendingNotificationRequests(withIdentifiers:
@@ -29,13 +31,16 @@ final class CallBadgeStore: ObservableObject {
                 identifier: update.id, content: content, trigger: trigger))
         }
     }, report: { [weak self] error in
-        self?.error = error == nil ? nil : "Icon badge unavailable. Missed calls are still saved here."
+        self?.error = error == nil ? nil : "Icon badge unavailable. Messages and missed calls are still saved."
     }, finished: { [weak self] in
         self?.releaseBackgroundTask()
     })
 
-    init(history: MissedCallStore) {
+    init(history: MissedCallStore, messages: MessageStore) {
         self.history = history
+        self.messages = messages
+        messages.missedCallCount = { [weak history] in history?.count ?? 0 }
+        messages.onUnreadChange = { [weak self] in self?.synchronize() }
         history.onChange = { [weak self] in self?.synchronize() }
     }
 
@@ -68,6 +73,7 @@ final class CallBadgeStore: ObservableObject {
             }
         }
         synchronizer.synchronize()
+        messages.synchronizeBadge()
     }
 
     private func releaseBackgroundTask() {
@@ -133,7 +139,7 @@ struct MissedCallsSection: View {
         } else if badge.permission == .notRequested || badge.permission == .disabled {
             Section {
                 BadgePermissionView(badge: badge)
-                Text("Allow badges to see missed calls on the Canddle icon. Calls are still saved here without permission.")
+                Text("Allow badges to see unread messages and missed calls on the Canddle icon. Both remain saved without permission.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -153,7 +159,7 @@ struct BadgePermissionView: View {
         case .unknown:
             EmptyView()
         case .notRequested:
-            Button("Enable missed-call icon badge") { Task { await badge.request() } }
+            Button("Enable message and missed-call badge") { Task { await badge.request() } }
                 .disabled(badge.requesting)
                 .accessibilityIdentifier("requestCallBadge")
         case .disabled:
@@ -162,7 +168,7 @@ struct BadgePermissionView: View {
             }
             .accessibilityIdentifier("callBadgeSettings")
         case .enabled:
-            Label("Missed-call icon badge enabled", systemImage: "app.badge")
+            Label("Message and missed-call badge enabled", systemImage: "app.badge")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("callBadgeEnabled")
         }

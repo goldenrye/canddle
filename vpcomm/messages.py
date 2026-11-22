@@ -51,6 +51,21 @@ def validate_envelope(message, identity, scope):
     return created
 
 
+def validate_receipt(message, identity, scope):
+    if (
+        not isinstance(message, dict)
+        or set(message) != {"type", "signature", *RECEIPT}
+        or not all(isinstance(value, str) for value in message.values())
+        or message["type"] != "chat-receipt"
+        or message["to"] != identity
+        or message["scope"] != scope
+    ):
+        raise ValueError("Invalid receipt")
+    verify(
+        identity, message["signature"], transcript("chat-receipt", *(message[k] for k in RECEIPT))
+    )
+
+
 class Messages:
     def __init__(self, path, access_token, sender=None):
         if len(access_token) < 32 or not access_token.isascii():
@@ -71,12 +86,16 @@ class Messages:
                 scope TEXT, sender TEXT, id TEXT, recipient TEXT, digest TEXT,
                 envelope TEXT, receipt TEXT, created REAL,
                 PRIMARY KEY(scope, sender, id));
+            CREATE TABLE IF NOT EXISTS chat_badges (
+                scope TEXT, identity TEXT, count INTEGER,
+                PRIMARY KEY(scope, identity));
         """)
         namespace = hashlib.sha256(access_token.encode()).hexdigest()
         previous = self.db.execute("SELECT value FROM namespace").fetchone()
         if not previous or previous[0] != namespace:
             self.db.executescript(
-                "DELETE FROM chat_keys; DELETE FROM chat_messages; DELETE FROM namespace;"
+                "DELETE FROM chat_keys; DELETE FROM chat_messages; DELETE FROM chat_badges; "
+                "DELETE FROM namespace;"
             )
             self.db.execute("INSERT INTO namespace VALUES (?)", (namespace,))
         self.db.commit()
@@ -149,6 +168,19 @@ class Messages:
         with self.db:
             self.db.execute("UPDATE chat_keys SET token='' WHERE identity=?", (identity,))
 
+    def badge_count(self, scope, identity):
+        row = self.db.execute(
+            "SELECT count FROM chat_badges WHERE scope=? AND identity=?", (scope, identity)
+        ).fetchone()
+        if row is None:
+            return None  # Older clients do not opt in to combined badges.
+        pending = self.db.execute(
+            "SELECT COUNT(*) FROM chat_messages WHERE scope=? AND recipient=? "
+            "AND envelope IS NOT NULL AND created>=?",
+            (scope, identity, time.time() - TTL),
+        ).fetchone()[0]
+        return row[0] + pending
+
     def handle(self, peer, message, peers):
         kind = message["type"]
         if kind == "chat-key":
@@ -168,7 +200,12 @@ class Messages:
                 (scope, peer.identity, json.dumps(message), time.time()),
             )
             peer.chat_scope = scope
-            self.emit(peer, {"type": "chat-ready", "push": "yes" if self.sender else "no"})
+            self.db.execute(
+                "DELETE FROM chat_badges WHERE scope=? AND identity=?", (scope, peer.identity)
+            )
+            self.emit(
+                peer, {"type": "chat-ready", "push": "yes" if self.sender else "no", "badges": "1"}
+            )
             return
         scope = peer.chat_scope
         if not scope:
@@ -250,16 +287,26 @@ class Messages:
                 peer,
                 {"type": "chat-stored", "scope": scope, "id": message["id"], "to": message["to"]},
             )
-        elif kind == "chat-receipt":
-            if set(message) != {"type", "signature", *RECEIPT}:
-                raise ValueError("Invalid receipt")
-            if message["to"] != peer.identity or message["scope"] != scope:
-                raise ValueError("Invalid receipt route")
-            verify(
-                peer.identity,
-                message["signature"],
-                transcript("chat-receipt", *(message[k] for k in RECEIPT)),
+        elif kind == "chat-badge" and set(message) == {"type", "count", "receipts"}:
+            count = int(message["count"])
+            if str(count) != message["count"] or not 0 <= count <= 1128:
+                raise ValueError("Invalid badge count")
+            receipts = json.loads(message["receipts"])
+            if not isinstance(receipts, list) or len(receipts) > 32:
+                raise ValueError("Invalid badge receipts")
+            for receipt in receipts:
+                validate_receipt(receipt, peer.identity, scope)
+            # Receipt removal and the device's local count commit together, preventing
+            # newly downloaded unread messages from being counted again as queued.
+            for receipt in receipts:
+                self.handle(peer, receipt, peers)
+            self.db.execute(
+                "INSERT INTO chat_badges VALUES (?,?,?) ON CONFLICT(scope,identity) "
+                "DO UPDATE SET count=excluded.count",
+                (scope, peer.identity, count),
             )
+        elif kind == "chat-receipt":
+            validate_receipt(message, peer.identity, scope)
             self.db.execute(
                 "UPDATE chat_messages SET envelope=NULL,receipt=? WHERE scope=? AND sender=? "
                 "AND id=? AND recipient=?",
@@ -318,7 +365,9 @@ class Messages:
                 if sender not in json.loads(row[3]):
                     continue
                 device = Device(recipient, row[0], row[1], scope, row[2])
-                if not await self.sender.send_message(device):
+                if not await self.sender.send_message(
+                    device, badge=self.badge_count(scope, recipient)
+                ):
                     with self.db:
                         self.db.execute(
                             "UPDATE chat_keys SET token='' "

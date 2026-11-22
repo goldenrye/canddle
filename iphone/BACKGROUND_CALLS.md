@@ -75,8 +75,8 @@ Old clients continue to work with the upgraded relay.
 Private text uses **regular APNs alert notifications**, never VoIP pushes.
 The optional message database and iOS alert permission are separate requirements.
 The existing Apple signing key is reused with the normal app topic and normal
-APNs device token. Alerts contain only generic text and do not change the
-missed-call Home Screen badge. Tap an alert to open Messages and retrieve/decrypt
+APNs device token. Alerts contain generic text and, for updated opted-in clients,
+a combined unread-message/missed-call badge. Tap an alert to open Messages and retrieve/decrypt
 queued text; no notification extension performs background decryption.
 See [Private Messages](MESSAGING.md) for setup and two-phone checks.
 
@@ -119,15 +119,16 @@ See [Private Messages](MESSAGING.md) for setup and two-phone checks.
 
 ### Missed-Call Badge
 
-In Canddle **Settings > Missed calls**, tap **Enable missed-call icon badge** and
+In Canddle **Settings > Missed calls**, tap **Enable message and missed-call badge** and
 allow access. This requests badge permission only, not notification sounds or
 banners. If already denied, enable **Badges** in iPhone notification settings.
 The Calls page also shows the permission action when badges are not enabled,
 even before the first missed call. In-app missed-call history does not require
 notification permission.
-Uncleared missed calls show a native red number on the existing Canddle icon,
+Unread messages plus uncleared missed calls show a native red number on the existing Canddle icon,
 not the Phone icon. Expand **Missed calls** on the Calls page and tap
-**Clear missed calls** to remove the count; simply opening the app does not clear it.
+**Clear missed calls** to remove only the missed-call portion; opening a message
+conversation clears only its unread portion. Simply opening the app clears neither.
 
 Authenticated incoming group and individual invitations are recorded when observed.
 An unanswered ringing timeout or a relay-reported call closure marks them missed.
@@ -150,6 +151,10 @@ identifier, not caller names, audio, sounds or banners. Answer/decline/clear upd
 or cancel these requests; serialized writes prevent an older request from
 overwriting newer state. This is a fallback for suspension, not a guarantee of
 exact OS delivery timing. The in-app journal is authoritative on foreground entry.
+Scheduled counts include unread messages known at scheduling time. Message APNs
+and local deadlines can overwrite each other while suspended; foreground sync
+reconciles both sources. Background message badges require the updated relay
+described in [Private Messages](MESSAGING.md#home-screen-badge).
 
 The journal persists locally in preferences and contains relay URL, call ID,
 caller public key/name, group flag, timestamp, deadline and outcome, but no audio or credentials.
@@ -157,7 +162,7 @@ Clearing retains deduplication receipts; **Forget saved relay** erases the journ
 and badge count. Entries can appear in device backups; they are not Keychain secrets.
 Calls never delivered to the app cannot be recovered as missed calls. APNs,
 force-quit, Focus and OS background limits still apply. No relay upgrade beyond
-the existing calling/profile support is required for these client-side changes.
+the existing calling/profile support is required for missed-call-only badges.
 
 On a provisioned iPhone, enable badges, lock the receiver and let a call time out;
 check the Canddle icon count. Repeat with caller cancellation, Answer, Decline,

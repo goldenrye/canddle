@@ -69,6 +69,9 @@ struct MessageChecks {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MessageStore(directory: root)
         var frames: [[String: String]] = []
+        var unreadChanges: [Int] = []
+        store.missedCallCount = { 2 }
+        store.onUnreadChange = { unreadChanges.append(store.unreadCount) }
         store.connect(signing: a, scope: scope, supported: true, trusted: { [bob: "Bob"] },
                       send: { frames.append($0) })
         defer { store.disconnect() }
@@ -82,13 +85,46 @@ struct MessageChecks {
         precondition(store.entries[0].state == .queued)
         store.receive(try ChatProtocol.receipt(sent, signing: b))
         precondition(store.entries[0].state == .delivered)
+        precondition(!frames.contains { $0["type"] == "chat-badge" },
+                     "Older relays must not receive unsupported badge frames")
+        store.receive(["type": "chat-ready", "push": "yes", "badges": "1"])
         let incoming = try ChatProtocol.seal("Private reply", to: alice,
             bundle: ChatProtocol.keyBundle(a, scope: scope), signing: b, scope: scope)
         store.receive(incoming)
         store.receive(incoming)
         precondition(store.entries.count == 2 && store.unreadCount == 1)
+        try await wait { frames.contains { $0["type"] == "chat-badge" && $0["count"] == "3" } }
+        let badge = frames.first { $0["type"] == "chat-badge" && $0["count"] == "3" }!
+        let receipts = try JSONDecoder().decode([[String: String]].self,
+                                                from: Data(badge["receipts"]!.utf8))
+        precondition(receipts.count == 1, "Duplicate delivery must not double-count a badge")
+        try ChatProtocol.verifyReceipt(receipts[0], message: incoming)
+        precondition(unreadChanges.filter { $0 == 1 }.count == 1)
+        let unreadReload = MessageStore(directory: root)
+        var restoredUnread = -1
+        unreadReload.onUnreadChange = { restoredUnread = unreadReload.unreadCount }
+        unreadReload.prepare(signing: a, scope: scope)
+        precondition(restoredUnread == 1, "Relaunch must restore the unread badge")
+        unreadReload.deactivate()
+        precondition(restoredUnread == 0, "Forgetting a relay must remove its message badge")
         store.markRead(bob)
         precondition(store.unreadCount == 0)
+        try await wait { frames.last { $0["type"] == "chat-badge" }?["count"] == "2" }
+        precondition(unreadChanges.last == 0, "Reading must refresh the combined badge")
+        store.selectedPeer = bob
+        let visible = try ChatProtocol.seal("Already visible", to: alice,
+            bundle: ChatProtocol.keyBundle(a, scope: scope), signing: b, scope: scope)
+        let changesBeforeVisible = unreadChanges.count
+        store.receive(visible)
+        precondition(store.unreadCount == 0 && unreadChanges.count == changesBeforeVisible,
+                     "Messages in the open conversation must not increment the badge")
+        try await wait {
+            frames.contains {
+                $0["type"] == "chat-badge" && $0["count"] == "2"
+                    && ($0["receipts"]?.contains(visible["id"]!) == true)
+            }
+        }
+        store.selectedPeer = nil
         let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
         precondition(files.count == 1)
         let bytes = try Data(contentsOf: files[0])

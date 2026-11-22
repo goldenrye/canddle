@@ -63,7 +63,7 @@ final class CallStore: ObservableObject {
     let lobby = GroupStore()
     let missedCalls = MissedCallStore()
     let messages = MessageStore()
-    lazy var callBadge = CallBadgeStore(history: missedCalls)
+    lazy var callBadge = CallBadgeStore(history: missedCalls, messages: messages)
     lazy var systemCalls = SystemCalls(owner: self)
     @Published var address = "" { didSet { saveRelay() } }
     @Published var token = "" { didSet { saveRelay() } }

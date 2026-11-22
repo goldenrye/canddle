@@ -173,6 +173,46 @@ import Foundation
             journal.forget()
         }
 
+        let combined = MissedCallStore(defaults: defaults, automaticallyExpire: false)
+        var unread = 2
+        var combinedWrites: [(Int, [MissedCallStore.BadgeUpdate])] = []
+        var combinedGate: CheckedContinuation<Void, Never>?
+        let combinedSync = MissedCallBadgeSync(history: combined, additionalCount: { unread },
+            write: { count, updates in
+                combinedWrites.append((count, updates))
+                if combinedWrites.count == 1 {
+                    await withCheckedContinuation { combinedGate = $0 }
+                }
+            })
+        combined.onChange = { [weak combinedSync] in combinedSync?.synchronize() }
+        let missed = try offer(), ringing = try offer()
+        combined.receive(missed, scope: scope, name: missed.name)
+        combined.closed(missed.id, scope: scope)
+        combined.receive(ringing, scope: scope, name: ringing.name)
+        while combinedGate == nil { await Task.yield() }
+        precondition(combinedWrites.last!.0 == 3)
+        precondition(combinedWrites.last!.1.first?.count == 4)
+        unread = 0 // Read messages while an older badge write is still running.
+        combinedSync.synchronize()
+        combinedGate?.resume()
+        await combinedSync.flush()
+        precondition(combinedWrites.last!.0 == 1, "Reading messages must preserve missed calls")
+        precondition(combinedWrites.last!.1.first?.count == 2,
+                     "Scheduled missed-call badges must use the latest unread count")
+        unread = 2
+        combined.clear()
+        await combinedSync.flush()
+        precondition(combinedWrites.last!.0 == 2, "Clearing calls must preserve unread messages")
+        combined.handled(ringing.id, scope: scope)
+        await combinedSync.flush()
+        precondition(combinedWrites.last!.0 == 2 && combinedWrites.last!.1.isEmpty)
+        unread = 0
+        combinedSync.synchronize()
+        await combinedSync.flush()
+        precondition(combinedWrites.last!.0 == 0)
+        combined.onChange = nil
+        combined.forget()
+
         let automatic = MissedCallStore(defaults: defaults)
         let unanswered = try offer()
         automatic.receive(unanswered, scope: scope, name: unanswered.name, timeout: 1)

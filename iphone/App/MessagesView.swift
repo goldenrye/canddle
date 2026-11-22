@@ -60,7 +60,8 @@ private struct MessageInbox: View {
                     Label(messages.status, systemImage: messages.online ? "lock.shield" : "wifi.slash")
                         .font(.subheadline)
                     if let error = messages.error { Text(error).font(.caption).foregroundStyle(.red) }
-                    MessageNotificationSettings(messages: messages)
+                    MessageNotificationSettings(messages: messages, badge: call.callBadge)
+                    BadgePermissionView(badge: call.callBadge)
                 } footer: {
                     Text("Only previously verified devices can exchange private text. Open Canddle on both phones after upgrading. Pending messages retry when connected; offline delivery expires after seven days.")
                 }
@@ -113,6 +114,7 @@ private struct MessageInbox: View {
 
 private struct MessageNotificationSettings: View {
     @ObservedObject var messages: MessageStore
+    @ObservedObject var badge: CallBadgeStore
     @StateObject private var state = MessageViewState()
 
     var body: some View {
@@ -123,6 +125,7 @@ private struct MessageNotificationSettings: View {
                         _ = try await UNUserNotificationCenter.current()
                             .requestAuthorization(options: [.alert, .sound, .badge])
                         UIApplication.shared.registerForRemoteNotifications()
+                        await badge.refresh()
                         let settings = await UNUserNotificationCenter.current().notificationSettings()
                         state.note = settings.alertSetting == .enabled
                             ? "Alerts enabled on this iPhone."

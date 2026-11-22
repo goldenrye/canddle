@@ -44,6 +44,10 @@ final class MessageStore: ObservableObject {
     private var storageBlocked = false
     private var flushing = false
     private var flushRequested = false
+    private var badgeSupported = false
+    private var receipts: [String: [String: String]] = [:]
+    var onUnreadChange: (() -> Void)?
+    var missedCallCount: () -> Int = { 0 }
     var unreadCount: Int { entries.filter(\.unread).count }
 
     init(directory: URL? = nil) {
@@ -56,6 +60,7 @@ final class MessageStore: ObservableObject {
         let hash = SHA256.hash(data: Data((scope + "|" + identity).utf8)).map { String(format: "%02x", $0) }.joined()
         let file = directory.appendingPathComponent(hash + ".sealed")
         guard self.file != file else { return }
+        defer { onUnreadChange?() }
         disconnect()
         self.scope = scope
         self.signing = signing
@@ -63,7 +68,7 @@ final class MessageStore: ObservableObject {
         selectedPeer = nil
         supported = false
         trusted = { [:] }
-        entries = []; seen = [:]; bundles = [:]; attempts = [:]
+        entries = []; seen = [:]; bundles = [:]; attempts = [:]; receipts = [:]
         storageBlocked = false
         error = nil
         do {
@@ -102,8 +107,10 @@ final class MessageStore: ObservableObject {
         try sealed.write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         #endif
+        let previousUnread = unreadCount
         if entries != next { entries = next }
         seen = recent
+        if unreadCount != previousUnread { onUnreadChange?() }
     }
 
     func connect(signing: Curve25519.Signing.PrivateKey, scope: String, supported: Bool,
@@ -138,6 +145,7 @@ final class MessageStore: ObservableObject {
         polling?.cancel(); polling = nil
         transmit = nil
         online = false
+        badgeSupported = false
         flushing = false
         flushRequested = false
         status = "Offline. Pending messages will retry when connected."
@@ -153,8 +161,14 @@ final class MessageStore: ObservableObject {
         trusted = { [:] }
         supported = false
         pushAvailable = false
-        entries = []; seen = [:]; bundles = [:]; attempts = [:]
+        entries = []; seen = [:]; bundles = [:]; attempts = [:]; receipts = [:]
         error = nil
+        onUnreadChange?()
+    }
+
+    func synchronizeBadge() {
+        guard transmit != nil else { return }
+        Task { await flush() }
     }
 
     func send(_ text: String, to peer: String) {
@@ -194,7 +208,10 @@ final class MessageStore: ObservableObject {
         var next = entries
         for index in next.indices where next[index].peer == peer { next[index].unread = false }
         guard next != entries else { return }
-        do { try persist(next) } catch { self.error = "Could not save read status." }
+        do {
+            try persist(next)
+            synchronizeBadge()
+        } catch { self.error = "Could not save read status." }
     }
 
     func clearReadHistory(_ peer: String) {
@@ -220,6 +237,28 @@ final class MessageStore: ObservableObject {
             }
         }
         do {
+            // Snapshot receipts and count before awaiting: newer arrivals stay relay-pending.
+            let batchKeys = Array(receipts.keys.sorted().prefix(32))
+            let batch = batchKeys.compactMap { receipts[$0] }
+            let remaining = Set(receipts.keys).subtracting(batchKeys)
+            let unacknowledgedUnread = entries.filter {
+                $0.unread && remaining.contains($0.peer + "|" + $0.id)
+            }.count
+            let count = max(0, missedCallCount()) + unreadCount - unacknowledgedUnread
+            if badgeSupported {
+                let encoded = String(data: try JSONEncoder().encode(batch), encoding: .utf8)!
+                try await transmit(["type": "chat-badge", "count": String(count), "receipts": encoded])
+            } else {
+                for receipt in batch {
+                    guard generation == id else { return }
+                    try await transmit(receipt)
+                }
+            }
+            guard generation == id else { return }
+            for (key, receipt) in zip(batchKeys, batch) where receipts[key] == receipt {
+                receipts[key] = nil
+            }
+            if !receipts.isEmpty { flushRequested = true }
             let contacts = trusted()
             let allowed = String(data: try JSONEncoder().encode(Array(contacts.keys.sorted().prefix(128))), encoding: .utf8)!
             try await transmit(["type": "chat-allow", "identities": allowed])
@@ -256,13 +295,15 @@ final class MessageStore: ObservableObject {
     }
 
     func receive(_ message: [String: String]) {
-        guard let signing, let transmit else { return }
+        guard let signing, transmit != nil else { return }
         do {
             switch message["type"] {
             case "chat-ready":
                 online = true
                 pushAvailable = message["push"] == "yes"
+                badgeSupported = message["badges"] == "1"
                 status = "Private text messages are end-to-end encrypted."
+                synchronizeBadge()
             case "chat-key":
                 guard let peer = message["identity"], trusted()[peer] != nil else { return }
                 _ = try ChatProtocol.verifyBundle(message, identity: peer, scope: scope)
@@ -282,12 +323,8 @@ final class MessageStore: ObservableObject {
                     try persist(entries + [entry], seen: nextSeen)
                 }
                 let receipt = try ChatProtocol.receipt(message, signing: signing)
-                let id = generation
-                Task {
-                    guard generation == id else { return }
-                    try? await transmit(receipt)
-                    if generation == id { await flush() }
-                }
+                receipts[key] = receipt
+                Task { await flush() }
             case "chat-stored", "chat-receipt", "chat-error":
                 guard let index = entries.firstIndex(where: {
                     $0.outgoing && $0.id == message["id"] && $0.peer == message["to"]

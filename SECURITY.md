@@ -88,7 +88,7 @@ keys do not provide forward secrecy against recipient-key compromise.
   message, so a sender returning after seven days can show failure even when a
   recipient received it earlier.
 - SQLite holds only encrypted bodies, signed bundles, allowlists, routing
-  metadata, timing, receipt signatures and APNs tokens. Delivered ciphertext is
+  metadata, timing, receipt signatures, aggregate badge counts and APNs tokens. Delivered ciphertext is
   removed on receipt; all message records expire seven days after creation.
   Expiry cleanup runs on traffic and every minute while the relay runs. This is
   not guaranteed physical erasure from backups, snapshots, or SSDs.
@@ -100,10 +100,20 @@ keys do not provide forward secrecy against recipient-key compromise.
   editing/forgetting relay settings hides it, but does not erase its encrypted
   file. Restoring the same relay/identity restores that history.
 - The relay and Apple see delivery timing and routing metadata. Normal APNs
-  alerts contain only generic text, no message body, name, caller offer, or
-  badge value. They are not VoIP pushes. They can be delayed, collapsed or
+  alerts contain generic text and an optional combined unread-message/missed-call
+  badge, but no message body, name or caller offer. They are not VoIP pushes. They can be delayed, collapsed or
   dropped, and an already queued generic alert can outlive message retrieval.
   Opening the app performs authenticated mailbox retrieval and decryption.
+- Badge-capable clients disclose their aggregate local count to the authenticated
+  relay, not to other members. `chat-badge` accepts only the authenticated device's
+  scope, a bounded count, and at most 32 recipient-signed delivery receipts.
+  Receipts and the count commit together; pending ciphertext adds to the next
+  APNs count. The relay can observe aggregate count changes but no per-message
+  read receipts are sent to callers/senders. Badge summaries persist until
+  replaced, a device republishes its key, or the relay access token rotates.
+  Badges are cosmetic, not authenticated evidence of message contents. Delayed
+  APNs and previously scheduled local missed-call badges can temporarily disagree;
+  the app reconciles from its stored history when foregrounded.
 
 Removing local trust immediately prevents new local sends/decryption; pending
 relay ciphertext from that sender is removed when the next allowlist sync

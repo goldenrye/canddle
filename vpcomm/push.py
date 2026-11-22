@@ -194,7 +194,7 @@ class APNs:
         LOG.warning("APNs rejected a VoIP delivery (HTTP %s)", response.status_code)
         return True
 
-    async def send_message(self, device):
+    async def send_message(self, device, badge=None):
         host = (
             "api.sandbox.push.apple.com"
             if device.environment == "development"
@@ -214,6 +214,7 @@ class APNs:
                 "aps": {
                     "alert": {"title": "Canddle", "body": "You have a new private message."},
                     "sound": "default",
+                    **({"badge": badge} if badge is not None else {}),
                 },
                 "canddle_message": True,
             },

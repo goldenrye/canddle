@@ -167,6 +167,7 @@ final class MissedCallStore: ObservableObject {
 @MainActor
 final class MissedCallBadgeSync {
     private let history: MissedCallStore
+    private let additionalCount: () -> Int
     private let write: (Int, [MissedCallStore.BadgeUpdate]) async throws -> Void
     private let report: (Error?) -> Void
     private let finished: () -> Void
@@ -174,10 +175,12 @@ final class MissedCallBadgeSync {
     private var revision = 0
 
     init(history: MissedCallStore,
+         additionalCount: @escaping () -> Int = { 0 },
          write: @escaping (Int, [MissedCallStore.BadgeUpdate]) async throws -> Void,
          report: @escaping (Error?) -> Void = { _ in },
          finished: @escaping () -> Void = {}) {
         self.history = history
+        self.additionalCount = additionalCount
         self.write = write
         self.report = report
         self.finished = finished
@@ -191,7 +194,11 @@ final class MissedCallBadgeSync {
             while true {
                 let version = revision
                 do {
-                    try await write(history.count, history.badgeUpdates())
+                    let extra = max(0, additionalCount())
+                    let updates = history.badgeUpdates().map {
+                        MissedCallStore.BadgeUpdate(id: $0.id, date: $0.date, count: $0.count + extra)
+                    }
+                    try await write(history.count + extra, updates)
                     report(nil)
                 } catch { report(error) }
                 if version == revision { return }

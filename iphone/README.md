@@ -105,8 +105,12 @@ the offline avatar appears, then restart the receiving app and check it again.
 
 ### Missed Calls
 
-Enable **Settings > Missed calls > Enable missed-call icon badge** to show a red
-unread count on the Canddle app icon. The Calls page has an expandable missed-call
+Enable **Settings > Missed calls > Enable message and missed-call badge** to show
+unread messages plus uncleared missed calls on the Canddle icon. Reading messages
+and clearing missed calls remove only their respective portions. Locked-screen
+message badges require the updated relay and a first foreground sync; see
+[message badge setup](MESSAGING.md#home-screen-badge).
+The Calls page has an expandable missed-call
 list with **Clear missed calls**. Answered/declined calls and duplicate events do
 not add to the count. Each entry shows the caller's cached photo, and the collapsed
 heading shows the latest caller's photo and name. Photos remain available offline;

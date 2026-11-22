@@ -39,8 +39,10 @@ sender leaves new text pending. No unverified or group-call fallback is used.
   call button. Busy/disconnected/unverified states disable calling. Calling
   does not clear the missed-call badge.
 - The bubble icon and conversation list show in-app unread counts. Opening a
-  conversation marks it read. The Home Screen icon remains the missed-call
-  counter; chat does not overwrite it.
+  conversation marks it read. The Home Screen badge is **unread messages plus
+  uncleared missed calls**. Reading messages removes only their part; clearing
+  missed calls preserves unread messages. Simply opening the inbox marks nothing
+  read. Messages received in the visible conversation are already read.
 - **Clear read history** removes that conversation's read incoming and completed
   outgoing entries. It retains unread/pending entries and recent dedupe IDs.
   It does not clear missed-call history or delete the other person's messages.
@@ -64,6 +66,30 @@ relay credentials, notification permission, network access, and Apple delivery.
 Focus, OS policies, collapse behavior, and expiry can delay or suppress alerts.
 One generic alert can represent several messages. The inbox is authoritative.
 Without APNs, offline delivery still works when the recipient opens Canddle.
+
+### Home Screen Badge
+
+Enable **Badges** under iPhone **Settings > Notifications > Canddle**. You can
+also request badge-only permission from Messages or the missed-call settings.
+Badge permission is separate from enabling banners/sounds.
+
+Upgrade both the app and relay, then open the app once to synchronize the
+combined count. Updated relays advertise `badges: "1"` in `chat-ready`; opted-in
+clients submit a bounded `chat-badge` summary and up to 32 signed delivery
+receipts together. The relay atomically removes acknowledged queued copies,
+stores the local count, and adds still-pending messages to subsequent APNs
+badges. The aggregate count contains no text or sender names and is not a read
+receipt to senders. Existing SQLite databases upgrade automatically.
+
+Older relays still support local unread badges, but not badges for messages
+waiting while the app is closed. Older apps do not opt in; their notification
+payloads continue to omit badges.
+
+While suspended, the badge is best-effort: APNs can arrive late, and a previously
+scheduled missed-call deadline can overwrite a newer message badge (or vice
+versa). Missed calls/read changes not yet synced are also absent from the relay's
+summary. Foreground entry and mailbox sync reconcile the exact local count.
+There is no notification extension to coordinate these OS writes while closed.
 
 End-to-end encryption uses CryptoKit X25519, HKDF-SHA256, AES-GCM, and Ed25519.
 This experimental protocol has **no forward secrecy or Signal-style ratchet**.
@@ -93,7 +119,13 @@ Direct source compilation does not validate signing, installation or APNs.
 - Exchange text after mutual verification; confirm pending, queued and delivered
   states. Inspect long text, emoji, keyboard layout, scrolling, and accessibility.
 - Background/lock the recipient and send text. Confirm a generic Canddle alert,
-  no caller screen, no plaintext/name in the preview, and no missed-badge change.
+  no caller screen, no plaintext/name in the preview, and an increased combined badge.
+- Start with two missed calls and send three messages: after sync the badge should
+  be five. Read the messages: it should be two. Clear missed calls while messages
+  remain unread: only the missed-call portion should disappear.
+- Test duplicate delivery, relaunch with unread text, messages in the visible
+  conversation, and a message arriving near a missed-call deadline. Verify the
+  count reconciles after foreground sync, with badges both enabled and denied.
 - Tap the alert; confirm correct inbox, one message, correct sender/photo, unread
   clearing, and the sender's eventual Delivered state.
 - Deny notification permission, enable it later in Settings, and repeat.
