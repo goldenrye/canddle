@@ -55,7 +55,7 @@ for high-sensitivity use.
 
 ## Private Text Messages
 
-Optional iPhone private text uses an independent protocol, not the audio session
+Optional iPhone private text and photos use an independent protocol, not the audio session
 keys. It is experimental and has not undergone independent cryptographic review.
 There is **no forward secrecy, Double Ratchet, or post-compromise recovery**.
 Compromise of a device's long-lived identity secret exposes retained ciphertext
@@ -94,7 +94,8 @@ keys do not provide forward secrecy against recipient-key compromise.
   not guaranteed physical erasure from backups, snapshots, or SSDs.
 - iPhone history/outbox is separately AES-GCM encrypted under a per-scope
   `chat-storage` HKDF key, written atomically, excluded from backup and protected
-  until first unlock. It holds at most 1,000 entries and 4,096 recent dedupe IDs.
+  until first unlock. It holds at most 1,000 entries, 4,096 recent dedupe IDs,
+  and 24,000,000 encrypted bytes (enforced both before writing and before reading).
   Full or corrupt storage fails closed without acknowledging unsaved messages.
   Dedupe survives clearing read history. History is retained until cleared;
   editing/forgetting relay settings hides it, but does not erase its encrypted
@@ -122,6 +123,58 @@ Forgetting/changing relay settings attempts authenticated revocation of both
 push token types; unreachable relays can retain usable registrations for up to
 seven days. Access-token rotation clears relay key/queue registrations at startup.
 Neither operation constitutes remote deletion of another person's history.
+
+### Photo Extension
+
+Photos use the same identity and derived X25519 keys but separate authenticated
+domains: `chat-photo-key(identity, scope, key)`, `chat-photo-encryption` for
+HKDF info/AAD, and `chat-photo-message` for the envelope signature. Their
+ordered fields match the text transcript; `type` is exactly `chat-photo`.
+Changing a photo envelope into text cannot preserve a valid signature or GCM tag.
+The encrypted plaintext is a JPEG, not a URL or remote fetch instruction.
+Receipts and dedupe IDs use the existing message protocol.
+
+The iPhone re-renders selected pixels into an oriented JPEG without copying
+source GPS/EXIF, filenames or other image metadata. The output is at most 128 KiB
+and 1,280 pixels per dimension. The input is at most 25 MiB, 30,000 pixels per
+dimension and 100 million pixels. Receiving clients check JPEG type, byte size,
+dimensions and decoding before storing or acknowledging. The relay cannot inspect
+image contents. Image parsing remains an OS attack surface from verified peers;
+these bounds reduce resource exposure but do not replace keeping iOS updated.
+
+Clipboard import uses the iOS system Paste button with image-only item providers,
+not background pasteboard reads. Picker and paste imports share the file-size
+check and pixel re-rendering path, and require an explicit Send photo action.
+Copy photo explicitly writes the displayed JPEG to the system clipboard in
+plaintext. Other apps (and system clipboard-sharing features) may access that
+user-copied image; end-to-end encryption does not protect clipboard exports.
+
+Large ciphertext never uses the normal call socket. A fresh bearer/TLS-authenticated
+`{"v":2,"photos":true}` connection gets a random challenge. The device signs
+`chat-photo-session(challenge, identity, scope)` and the relay requires an existing
+photo-key opt-in before accepting one upload, pull, or sender-only status query.
+There is no lobby registration, presence change or call-resume token on this
+connection. Authentication is bounded to ten seconds and its operation to 45 seconds;
+the client separately bounds upload and response waits to 30 seconds. At most one
+photo operation per device/scope is active, with an eight-operation burst and
+two/second refill. These sockets count toward the relay's global connection limit.
+They isolate stream blocking and cancellation, not physical network bandwidth.
+
+The outer photo frame limit is 176 KiB. Ordinary lobby/group parsers retain their
+existing 1 KiB / 8 KiB limits (32 KiB for SDP). Message storage keeps the 256-key,
+4,096-record and 200-pending-record bounds, plus 8 MiB of serialized pending
+envelopes involving a sender/recipient and 64 MiB across the database. These are
+logical payload bounds, not SQLite file-size or backup-size guarantees. A pull
+returns at most one photo and rotates through unacknowledged items. Photo failure
+does not revoke call membership; the client durably saves ciphertext before upload.
+
+Text key bundles and text wire messages are unchanged. The relay advertises photos
+in `chat-ready` and stores a separately signed photo bundle, returned only to an
+allowed sender requesting it. Republishing the text key clears photo opt-in until
+the new app republishes the photo bundle, protecting downgraded apps. Photos are
+excluded from ordinary text mailbox delivery. Existing databases migrate
+automatically. The relay learns message kind and encrypted size; APNs remains
+generic and never includes image bytes or a thumbnail.
 
 ## Credential Separation
 

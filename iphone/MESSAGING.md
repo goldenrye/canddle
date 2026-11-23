@@ -1,7 +1,7 @@
 # Private Messages
 
-Canddle supports one-to-one text between previously verified iPhone device keys.
-The desktop client does not implement chat. Group text, attachments, reactions,
+Canddle supports one-to-one text and photos between previously verified iPhone device keys.
+The desktop client does not implement chat. Group chat, other attachments, reactions,
 typing indicators, read receipts, and multi-device history sync are not included.
 Calls and their verification rules remain unchanged.
 
@@ -21,6 +21,52 @@ Calls and their verification rules remain unchanged.
 Older relays or relays without `VPCOMM_MESSAGES_DB` show messaging unavailable;
 calls still work. A recipient who has not yet enabled messaging or verified the
 sender leaves new text pending. No unverified or group-call fallback is used.
+
+## Send a Photo
+
+Upgrade the relay and both iPhone apps, then open Canddle on both phones once.
+In a conversation, tap the photo icon, choose one image, review the preview,
+and tap **Send photo**. Tap a received or sent photo to open it full-screen.
+Text drafts are separate and remain in the composer.
+
+To paste a picture, use **Copy Image** in another app (or copy a screenshot),
+then tap **Paste** beside the conversation's photo icon. Review the image and
+tap **Send photo**; pasting never sends automatically or replaces your text draft.
+The iOS system Paste button accepts image content, not a copied URL or plain text,
+and is unavailable when the clipboard has no compatible image. Regular text paste
+in the message field remains unchanged. There is no automatic clipboard read.
+
+Long-press a sent/received picture and choose **Copy photo**, or open it full-screen
+and tap **Copy photo**. This copies the resized JPEG, not the original source file.
+An explicitly copied photo is on the system clipboard in readable form and can be
+pasted into other apps; clipboard protections are separate from message encryption.
+
+The system picker grants access only to the selected image; full photo-library
+permission is not required. The app accepts source images up to 25 MB, corrects
+orientation, preserves aspect ratio, and sends a JPEG copy at most 1,280 pixels
+on its longest side and 128 KiB. Original filenames, GPS and capture metadata
+are not copied. Photos are compressed, not original-quality file transfers;
+animated images/Live Photos send a single still frame. Camera capture, videos,
+captions, saving to Files/Photos, and other file types are not included.
+
+Photo bytes and local history are end-to-end encrypted like text. The relay
+can observe that a message is a photo and its encrypted size, but cannot see
+the image. Generic push notifications and unread badges work the same as text.
+Delivery requires successful image validation and durable storage on the recipient.
+
+An authenticated, short-lived connection to the same `/relay` endpoint handles
+each photo upload/download/status check, independently of the call-signaling socket.
+Failed transfers retry from the beginning using the same ciphertext/ID; queued
+photos poll a small status message instead of repeatedly uploading the image.
+They still share the phone's bandwidth, so photo traffic can compete with audio
+on poor coverage. Polling can add about 15 seconds before delivery.
+
+Older apps keep exchanging text. Updated relays advertise `photos: "1"` in
+`chat-ready`; only updated recipients publish a separately signed photo key.
+The photo button requires a connection to a photo-capable relay. Photos already
+saved in the outbox survive disconnection/relaunch and retry. A text-only
+recipient leaves a photo pending with an upgrade/verification explanation.
+No new public port, service, or environment variable is required.
 
 ## Conversation Behavior
 
@@ -46,9 +92,10 @@ sender leaves new text pending. No unverified or group-call fallback is used.
 - **Clear read history** removes that conversation's read incoming and completed
   outgoing entries. It retains unread/pending entries and recent dedupe IDs.
   It does not clear missed-call history or delete the other person's messages.
-- History is capped at 1,000 entries per device/relay. Clear read history when
-  full; unsaved incoming text is not acknowledged. Corrupt files are preserved,
-  not overwritten. Relay queue limits can also reject new text.
+- History is capped at 1,000 entries and 24 MB of encrypted storage per device/relay.
+  Photos can fill this before the entry limit. Clear read history when full;
+  unsaved incoming messages are not acknowledged. Corrupt files are preserved,
+  not overwritten. Relay queues also have record and byte limits.
 - Relay changes dismiss the conversation and isolate its history. Encrypted
   history remains on the phone; restoring the same relay and device identity
   restores it. There is no backup/export/import or identity-key migration.
@@ -111,10 +158,30 @@ python -m pytest tests/test_messages.py tests/test_push.py -q
 
 Coverage includes tamper/expiry rejection, Swift/Python crypto interoperability,
 encrypted persistence and dedupe, signed receipts, offline/reconnect delivery,
-capability absence, call coexistence, revocation, bounds, and queue backpressure.
+capability absence, photo orientation/metadata removal, photo offline delivery,
+call coexistence, revocation, byte bounds, and queue backpressure.
 Direct source compilation does not validate signing, installation or APNs.
 
 ## Two-Phone Release Checks
+
+- Copy an image from Photos, Safari's Copy Image action, and a screenshot; tap
+  Paste, preview, remove/replace, then Send photo. Confirm a text draft survives,
+  plain text/URL-only clipboard content does not become a photo, and opening a
+  conversation never reads the clipboard. Copy a received photo and paste it
+  into another conversation. Check narrow screens and large accessibility text.
+- Leave the conversation or change relays while a large pasted image is loading.
+  Confirm the late result does not create a draft in the new conversation.
+- Choose portrait/landscape, HEIC, rotated, transparent, and large photos. Confirm
+  the preview, explicit Send photo, full-screen viewing, and canceled selection.
+  Check metadata removal and quality on the received JPEG. Incoming messages
+  while the picker/viewer is covering the conversation should stay unread until
+  returning to the conversation.
+- Send a photo while the recipient is offline, reconnect, and confirm exactly
+  one image, one unread badge, and eventual Delivered status. Interrupt a transfer
+  with Wi-Fi/cellular changes and verify retry without duplicate messages.
+- Exchange photos while a call rings and while audio is active. Confirm that
+  photo failure does not disconnect call signaling. Check bandwidth effects on
+  a slow cellular connection and pending photos to text-only recipients.
 
 - Exchange text after mutual verification; confirm pending, queued and delivered
   states. Inspect long text, emoji, keyboard layout, scrolling, and accessibility.

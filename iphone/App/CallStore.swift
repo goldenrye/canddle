@@ -184,6 +184,9 @@ final class CallStore: ObservableObject {
             }, send: { [weak self] message in
                 guard let self else { throw VoiceError.ended }
                 try await self.lobby.sendMessageFrame(message, scope: scope)
+            }, transferPhoto: { [weak self] message in
+                guard let self else { throw VoiceError.ended }
+                return try await self.lobby.transferPhoto(message, scope: scope)
             })
         }
         lobby.onAudioEnded = { [weak self] message in

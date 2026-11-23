@@ -38,11 +38,11 @@ def bundle(device):
     )
 
 
-def envelope(sender, recipient, text="Can you call me?", created=None):
+def envelope(sender, recipient, text="Can you call me?", created=None, *, photos=False):
     ephemeral = X25519PrivateKey.generate()
     public = bundle(recipient)["key"]
     message = {
-        "type": "chat-send",
+        "type": "chat-photo" if photos else "chat-send",
         "id": encode(secrets.token_bytes(16)),
         "from": sender.identity,
         "to": recipient.identity,
@@ -51,14 +51,17 @@ def envelope(sender, recipient, text="Can you call me?", created=None):
         "ephemeral": encode(ephemeral.public_key().public_bytes_raw()),
         "created": str(int(time.time()) if created is None else created),
     }
-    aad = transcript("chat-encryption", *(message[k] for k in FIELDS[:-1]))
+    aad = transcript("chat-photo-encryption" if photos else "chat-encryption",
+                     *(message[k] for k in FIELDS[:-1]))
     shared = ephemeral.exchange(X25519PublicKey.from_public_bytes(decode(public, 32)))
     key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"vpcomm/chat/v1", info=aad).derive(
         shared
     )
     nonce = secrets.token_bytes(12)
-    message["body"] = encode(nonce + AESGCM(key).encrypt(nonce, text.encode(), aad))
-    return sender.signed("chat-message", [message[k] for k in FIELDS], message)
+    raw = text if isinstance(text, bytes) else text.encode()
+    message["body"] = encode(nonce + AESGCM(key).encrypt(nonce, raw, aad))
+    return sender.signed("chat-photo-message" if photos else "chat-message",
+                         [message[k] for k in FIELDS], message)
 
 
 def receipt(device, message):

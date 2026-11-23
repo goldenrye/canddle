@@ -312,6 +312,34 @@ final class Relay {
         try await receive(seconds: seconds)
     }
 
+    /// Use a new Relay instance: photo bytes never share the call-control socket.
+    func transferPhoto(_ message: [String: String], signing: Curve25519.Signing.PrivateKey,
+                       scope: String) async throws -> [String: String] {
+        defer { stop() }
+        guard ["chat-photo", "chat-photo-pull", "chat-photo-status"].contains(message["type"] ?? ""),
+              !ended else { throw VoiceError.packet }
+        socket.maximumMessageSize = ChatProtocol.maximumPhotoFrame
+        socket.resume()
+        try await send(.string("{\"v\":2,\"photos\":true}"), seconds: 10)
+        let challenge = try await lobbyReceive(seconds: 10)
+        guard challenge["type"] == "challenge", let nonce = challenge["challenge"] else { throw VoiceError.packet }
+        _ = try VoiceProtocol.decode(nonce, size: 32)
+        let identity = VoiceProtocol.base64(signing.publicKey.rawRepresentation)
+        try await lobbySend(["type": "photo-register", "identity": identity, "scope": scope,
+            "signature": VoiceProtocol.base64(try signing.signature(for:
+                LobbyProtocol.transcript("chat-photo-session", [nonce, identity, scope])))])
+        guard try await lobbyReceive(seconds: 10) == ["type": "photo-online"] else { throw VoiceError.peer }
+        let encoded = try JSONEncoder().encode(message)
+        guard encoded.count <= ChatProtocol.maximumPhotoFrame else { throw VoiceError.packet }
+        try await send(.string(String(decoding: encoded, as: UTF8.self)), seconds: 30)
+        guard case .string(let text) = try await receive(seconds: 30),
+              text.utf8.count <= ChatProtocol.maximumPhotoFrame else { throw VoiceError.packet }
+        let reply = try JSONDecoder().decode([String: String].self, from: Data(text.utf8))
+        guard ["chat-photo", "chat-photo-empty", "chat-stored", "chat-receipt", "chat-error"]
+            .contains(reply["type"] ?? "") else { throw VoiceError.packet }
+        return reply
+    }
+
     func connect(_ invitation: CallInvitation, waiting: () -> Void) async throws -> String {
         guard !ended else { throw VoiceError.ended }
         socket.resume()

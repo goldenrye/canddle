@@ -829,6 +829,13 @@ final class GroupStore: ObservableObject {
         try await transport.groupSend(message)
     }
 
+    func transferPhoto(_ message: [String: String], scope expectedScope: String) async throws -> [String: String] {
+        guard online, scope == expectedScope, let connectionSettings, let signing,
+              transport?.supportsMessages == true else { throw VoiceError.ended }
+        let relay = Relay(connectionSettings)
+        return try await relay.transferPhoto(message, signing: signing, scope: expectedScope)
+    }
+
     private func receive(_ message: [String: String]) throws {
         if message["type"]?.hasPrefix("chat-") == true {
             if transport?.supportsMessages == true { onMessage?(message) }

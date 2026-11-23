@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+                FA0000000000000000000001 /* ChatImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0000000000000000000002; };
                 F90000000000000000000001 /* ChatProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90000000000000000000002; };
                 F90000000000000000000003 /* MessageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90000000000000000000004; };
                 F90000000000000000000005 /* MessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90000000000000000000006; };
@@ -55,6 +56,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+                FA0000000000000000000002 /* ChatImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatImage.swift; sourceTree = "<group>"; };
                 F90000000000000000000002 /* ChatProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatProtocol.swift; sourceTree = "<group>"; };
                 F90000000000000000000004 /* MessageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStore.swift; sourceTree = "<group>"; };
                 F90000000000000000000006 /* MessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesView.swift; sourceTree = "<group>"; };
@@ -156,6 +158,7 @@
 		A00000000000000000000021 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+                                FA0000000000000000000002 /* ChatImage.swift */,
                                 F90000000000000000000002 /* ChatProtocol.swift */,
                                 F80000000000000000000002 /* MissedCallStore.swift */,
                                 F80000000000000000000004 /* MemberProfileCache.swift */,
@@ -264,6 +267,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                                FA0000000000000000000001 /* ChatImage.swift in Sources */,
                                 F90000000000000000000001 /* ChatProtocol.swift in Sources */,
                                 F90000000000000000000003 /* MessageStore.swift in Sources */,
                                 F90000000000000000000005 /* MessagesView.swift in Sources */,

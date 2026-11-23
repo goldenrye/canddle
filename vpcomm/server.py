@@ -20,7 +20,7 @@ from websockets.exceptions import ConnectionClosed
 from .crypto import encode
 from .group import GroupLobby
 from .lobby import Lobby, name_valid, transcript, verify
-from .messages import Messages
+from .messages import PHOTO_FRAME_LIMIT, Messages
 from .pairing import PairingCodes, admin_socket
 from .push import from_environment
 from .webrtc import SIGNAL_LIMIT
@@ -122,6 +122,11 @@ class Relay:
             if not isinstance(raw, str) or len(raw) > 128:
                 raise ValueError("Invalid join")
             request = json.loads(raw)
+            if request == {"v": 2, "photos": True}:
+                if not self.group.messages:
+                    raise ValueError("Messages unavailable")
+                await self.group.messages.transfer(socket)
+                return
             if request == {"v": 2, "push": True}:
                 await self.revoke_push(socket)
                 return
@@ -229,7 +234,8 @@ async def build_server(relay: Relay, host: str, port: int):
         host,
         port,
         process_request=relay.authorize,
-        max_size=SIGNAL_LIMIT,
+        # Ordinary group/lobby parsers retain their smaller per-message limits.
+        max_size=max(SIGNAL_LIMIT, PHOTO_FRAME_LIMIT) if relay.group.messages else SIGNAL_LIMIT,
         max_queue=4,
         write_limit=8192,
         compression=None,

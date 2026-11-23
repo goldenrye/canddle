@@ -29,6 +29,17 @@ needed. Without APNs, messages queue and deliver when the recipient opens
 Canddle; there is no background message alert. Existing calls still work with
 messaging disabled.
 
+Photo messages require this updated relay and updated apps on both phones.
+Open both apps once to publish photo support. The existing SQLite database
+migrates automatically; no additional overlay, environment variable or public
+port is needed. Encrypted photos use short-lived authenticated WebSockets on
+the same `/relay` path, separate from call signaling. Proxies must permit
+176 KiB WebSocket messages; ordinary call-control frame limits remain unchanged.
+Photo connections count toward `--max-connections` (default 32).
+Back up the mailbox database before upgrading. Rolling the relay binary back
+requires its matching database backup because this upgrade extends the schema;
+older iPhone apps remain compatible with the upgraded relay.
+
 For non-Docker deployments, set `VPCOMM_MESSAGES_DB` to a writable private
 SQLite file path; its parent directory must already exist. Do not use the push
 database path. The relay stores ciphertext, signed key bundles, receipt and
@@ -39,7 +50,9 @@ receipt arrives. Backups/snapshots require their own retention policy. Rotating
 `VPCOMM_ACCESS_TOKEN` clears the message database namespace at the next startup.
 
 Limits: 256 device/scope key registrations, 4,096 retained message records, and
-200 pending records involving a sender or recipient. Full queues reject new
+200 pending records involving a sender or recipient. Pending serialized
+envelopes are also capped at 8 MiB involving a sender/recipient and 64 MiB
+globally; a photo is at most 128 KiB before encryption. Full queues reject new
 messages without disconnecting calls. Device keys are stable and registrations
 are not automatically evicted; large deployments need a separate lifecycle
 design. Monitor private volume free space and keep SQLite off network filesystems.

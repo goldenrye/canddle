@@ -1,10 +1,31 @@
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
 import UserNotifications
 
 @MainActor
 private final class MessageViewState: ObservableObject {
     @Published var note = ""
     @Published var draft = ""
+    @Published var showPhotoPicker = false
+    @Published var preparingPhoto = false
+    @Published var photo: Data?
+    @Published var photoError: String?
+    @Published var viewingPhoto: MessagePhotoPreview?
+    var photoRequest: UUID?
+    var photoProgress: Progress?
+
+    func cancelPhotoImport() {
+        photoRequest = nil
+        photoProgress?.cancel()
+        photoProgress = nil
+        preparingPhoto = false
+    }
+}
+
+private struct MessagePhotoPreview: Identifiable {
+    let id = UUID()
+    let data: Data
 }
 
 struct MessageInboxButton: View {
@@ -63,7 +84,7 @@ private struct MessageInbox: View {
                     MessageNotificationSettings(messages: messages, badge: call.callBadge)
                     BadgePermissionView(badge: call.callBadge)
                 } footer: {
-                    Text("Only previously verified devices can exchange private text. Open Canddle on both phones after upgrading. Pending messages retry when connected; offline delivery expires after seven days.")
+                    Text("Only previously verified devices can exchange private text and photos. Open Canddle on both phones after upgrading. Pending messages retry when connected; offline delivery expires after seven days.")
                 }
                 if peers.isEmpty {
                     Section {
@@ -84,7 +105,7 @@ private struct MessageInbox: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(name(peer)).font(.headline)
                                         if let last = messages.entries.last(where: { $0.peer == peer }) {
-                                            Text(last.text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                            Text(last.preview).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                         } else { Text("Start a private conversation").font(.caption).foregroundStyle(.secondary) }
                                     }
                                     Spacer()
@@ -179,6 +200,46 @@ private struct ConversationView: View {
             && ![GroupPresenceState.calling, .joining, .inCall].contains(lobby.presence[peer]?.state ?? .unknown)
     }
 
+    private func updateReadVisibility() {
+        let visible = phase == .active && !state.showPhotoPicker && state.viewingPhoto == nil
+        if visible {
+            messages.selectedPeer = peer
+            messages.markRead(peer)
+        } else if messages.selectedPeer == peer {
+            messages.selectedPeer = nil
+        }
+    }
+
+    private func importPhoto(_ provider: NSItemProvider) {
+        guard verified, messages.photosSupported, !state.preparingPhoto else { return }
+        let photoScope = messages.scope
+        let request = UUID()
+        state.photoRequest = request
+        state.preparingPhoto = true
+        state.photoError = nil
+        state.note = ""
+        state.photoProgress = ChatImage.prepare(provider: provider) { result in
+            Task { @MainActor in
+                guard state.photoRequest == request else { return }
+                state.photoRequest = nil
+                state.photoProgress = nil
+                state.preparingPhoto = false
+                guard messages.scope == photoScope, verified else { return }
+                switch result {
+                case .success(let data): state.photo = data
+                case .failure:
+                    state.photoError = "Could not prepare that picture. Copy or choose an image smaller than 25 MB, not a link."
+                }
+            }
+        }
+    }
+
+    private func copyPhoto(_ data: Data) {
+        UIPasteboard.general.setData(data, forPasteboardType: UTType.jpeg.identifier)
+        state.note = "Photo copied"
+        UIAccessibility.post(notification: .announcement, argument: "Photo copied")
+    }
+
     var body: some View {
         ScrollViewReader { conversation(proxy: $0) }
     }
@@ -186,13 +247,31 @@ private struct ConversationView: View {
     private func conversation(proxy: ScrollViewProxy) -> some View {
         List {
             if !verified { Text("Verify this device in a call before sending messages.").foregroundStyle(.orange) }
+            if !messages.online || messages.status.hasPrefix("Waiting") {
+                Text(messages.status).font(.caption).foregroundStyle(.secondary)
+            }
             if let error = messages.error { Text(error).font(.caption).foregroundStyle(.red) }
             ForEach(events) { event in
                 if let entry = event.entry {
                     HStack {
                         if entry.outgoing { Spacer(minLength: 30) }
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(entry.text).textSelection(.enabled)
+                            if let photo = entry.photo {
+                                Button { state.viewingPhoto = MessagePhotoPreview(data: photo) } label: {
+                                    MessagePhotoImage(data: photo)
+                                        .frame(maxWidth: 240, maxHeight: 240)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(entry.outgoing ? "Sent photo. Open photo." : "Received photo. Open photo.")
+                                .contextMenu {
+                                    Button { copyPhoto(photo) } label: {
+                                        Label("Copy photo", systemImage: "doc.on.doc")
+                                    }
+                                }
+                            } else {
+                                Text(entry.text).textSelection(.enabled)
+                            }
                             HStack {
                                 Text(entry.date, style: .time)
                                 if entry.outgoing {
@@ -238,33 +317,149 @@ private struct ConversationView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            HStack(alignment: .bottom, spacing: 12) {
-                TextField("Private message", text: $state.draft, axis: .vertical).lineLimit(1...5)
-                    .padding(10).background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
-                Button {
-                    let count = messages.entries.count
-                    messages.send(state.draft, to: peer)
-                    if messages.entries.count > count { state.draft = "" }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.title).frame(width: 44, height: 44)
+            VStack(spacing: 8) {
+                if state.preparingPhoto {
+                    ProgressView("Preparing photo...")
                 }
-                .accessibilityLabel("Send message")
-                .disabled(!verified || !messages.supported || state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                          || state.draft.utf8.count > 4096)
+                if let error = state.photoError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
+                if !state.note.isEmpty { Text(state.note).font(.caption).foregroundStyle(.secondary) }
+                if let photo = state.photo {
+                    HStack(spacing: 12) {
+                        MessagePhotoImage(data: photo).frame(width: 80, height: 80)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Photo ready").font(.subheadline.bold())
+                            Text("Resized, encrypted, no location metadata").font(.caption).foregroundStyle(.secondary)
+                            Button("Send photo") {
+                                if messages.sendPhoto(photo, to: peer) { state.photo = nil }
+                            }.disabled(!verified || !messages.photosSupported)
+                        }
+                        Spacer()
+                        Button { state.photo = nil } label: { Image(systemName: "xmark.circle.fill") }
+                            .accessibilityLabel("Remove selected photo")
+                    }
+                }
+                HStack(alignment: .bottom, spacing: 10) {
+                    Button { state.showPhotoPicker = true; state.photoError = nil } label: {
+                        Image(systemName: "photo").font(.title2).frame(width: 36, height: 44)
+                    }
+                    .accessibilityLabel("Choose photo")
+                    .accessibilityIdentifier("chooseMessagePhoto")
+                    .disabled(!verified || !messages.photosSupported || state.preparingPhoto)
+                    PasteButton(supportedContentTypes: [.image]) { providers in
+                        guard let provider = providers.first else { return }
+                        importPhoto(provider)
+                    }
+                    .labelStyle(.titleAndIcon).controlSize(.small)
+                    .accessibilityLabel("Paste photo")
+                    .accessibilityIdentifier("pasteMessagePhoto")
+                    .disabled(!verified || !messages.photosSupported || state.preparingPhoto || state.showPhotoPicker)
+                    TextField("Private message", text: $state.draft, axis: .vertical).lineLimit(1...5)
+                        .padding(10).background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+                    Button {
+                        let count = messages.entries.count
+                        messages.send(state.draft, to: peer)
+                        if messages.entries.count > count { state.draft = "" }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill").font(.title).frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Send message")
+                    .disabled(!verified || !messages.supported || state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || state.draft.utf8.count > 4096)
+                }
+                if !messages.photosSupported {
+                    Text("Photos require a connection to an updated messaging relay.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }.padding().background(.regularMaterial)
         }
+        .sheet(isPresented: $state.showPhotoPicker) {
+            MessagePhotoPicker(selected: { provider in
+                state.showPhotoPicker = false
+                importPhoto(provider)
+            }, canceled: { state.showPhotoPicker = false })
+        }
+        .fullScreenCover(item: $state.viewingPhoto) { preview in
+            NavigationStack {
+                MessagePhotoImage(data: preview.data)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemBackground))
+                    .navigationTitle("Photo").navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button(state.note == "Photo copied" ? "Copied" : "Copy photo") {
+                                copyPhoto(preview.data)
+                            }
+                            .accessibilityIdentifier("copyMessagePhoto")
+                        }
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") { state.viewingPhoto = nil }
+                        }
+                    }
+                    .overlay {
+                        if phase != .active { Color(.systemBackground).ignoresSafeArea() }
+                    }
+            }
+        }
         .onAppear {
-            messages.selectedPeer = peer
-            messages.markRead(peer)
+            updateReadVisibility()
             if let last = events.last { proxy.scrollTo(last.id, anchor: .bottom) }
         }
         .onChange(of: events.last?.id) { id in
             if let id { proxy.scrollTo(id, anchor: .bottom) }
         }
-        .onDisappear { if messages.selectedPeer == peer { messages.selectedPeer = nil } }
-        .onChange(of: phase) {
-            messages.selectedPeer = $0 == .active ? peer : nil
-            if $0 == .active { messages.markRead(peer) }
+        .onDisappear {
+            state.cancelPhotoImport()
+            if messages.selectedPeer == peer { messages.selectedPeer = nil }
+        }
+        .onChange(of: messages.scope) { _ in
+            state.cancelPhotoImport()
+            state.photo = nil
+        }
+        .onChange(of: phase) { _ in updateReadVisibility() }
+        .onChange(of: state.showPhotoPicker) { _ in updateReadVisibility() }
+        .onChange(of: state.viewingPhoto?.id) { _ in
+            state.note = ""
+            updateReadVisibility()
+        }
+    }
+}
+
+private struct MessagePhotoImage: View {
+    let data: Data
+    var body: some View {
+        if let image = ChatImage.image(data) {
+            Image(decorative: image, scale: 1).resizable().scaledToFit()
+        } else {
+            Label("Photo unavailable", systemImage: "photo")
+        }
+    }
+}
+
+private struct MessagePhotoPicker: UIViewControllerRepresentable {
+    let selected: (NSItemProvider) -> Void
+    let canceled: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.filter = .images
+        config.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
+
+    @MainActor final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: MessagePhotoPicker
+        init(_ parent: MessagePhotoPicker) { self.parent = parent }
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard let item = results.first else { parent.canceled(); return }
+            parent.selected(item.itemProvider)
         }
     }
 }

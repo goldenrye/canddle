@@ -10,10 +10,12 @@ final class MessageStore: ObservableObject {
         let peer: String
         let outgoing: Bool
         let text: String
+        var photo: Data?
         var date: Date
         var state: Delivery
         var unread: Bool
         var envelope: [String: String]?
+        var preview: String { photo == nil ? text : "Photo" }
     }
     private struct Saved: Codable {
         var entries: [Entry] = []
@@ -23,6 +25,7 @@ final class MessageStore: ObservableObject {
     @Published private(set) var status = "Connect to your relay to enable private messages."
     @Published private(set) var online = false
     @Published private(set) var supported = false
+    @Published private(set) var photosSupported = false
     @Published private(set) var pushAvailable = false
     @Published private(set) var error: String?
     @Published var notificationError: String?
@@ -36,10 +39,16 @@ final class MessageStore: ObservableObject {
     private let directory: URL
     private var seen: [String: Date] = [:]
     private var bundles: [String: [String: String]] = [:]
+    private var photoBundles: [String: [String: String]] = [:]
     private var attempts: [String: Date] = [:]
     private var trusted: () -> [String: String] = { [:] }
     private var transmit: (([String: String]) async throws -> Void)?
     private var polling: Task<Void, Never>?
+    private var photoTask: Task<Void, Never>?
+    private var photoTransfer: (([String: String]) async throws -> [String: String])?
+    private var photoReady = false
+    private var photoKeySent = false
+    private var photoSyncRequested = false
     private var generation = UUID()
     private var storageBlocked = false
     private var flushing = false
@@ -99,6 +108,7 @@ final class MessageStore: ObservableObject {
         let recent = (nextSeen ?? seen).filter { $0.value > Date().addingTimeInterval(-ChatProtocol.lifetime) }
         guard next.count <= 1000, recent.count <= 4096 else { throw VoiceError.packet }
         let data = try JSONEncoder().encode(Saved(entries: next, seen: recent))
+        guard data.count + 28 <= 24_000_000 else { throw VoiceError.packet }
         let sealed = try AES.GCM.seal(data, using: ChatProtocol.derive(signing,
             scope: scope, purpose: "chat-storage")).combined!
         #if os(iOS)
@@ -115,7 +125,8 @@ final class MessageStore: ObservableObject {
 
     func connect(signing: Curve25519.Signing.PrivateKey, scope: String, supported: Bool,
                  trusted: @escaping () -> [String: String],
-                 send: @escaping ([String: String]) async throws -> Void) {
+                 send: @escaping ([String: String]) async throws -> Void,
+                 transferPhoto: (([String: String]) async throws -> [String: String])? = nil) {
         prepare(signing: signing, scope: scope)
         disconnect()
         self.supported = supported
@@ -125,6 +136,7 @@ final class MessageStore: ObservableObject {
             return
         }
         transmit = send
+        photoTransfer = transferPhoto
         let id = generation
         polling = Task { [weak self] in
             guard let self, generation == id, !Task.isCancelled else { return }
@@ -143,6 +155,13 @@ final class MessageStore: ObservableObject {
     func disconnect() {
         generation = UUID()
         polling?.cancel(); polling = nil
+        photoTask?.cancel(); photoTask = nil
+        photoTransfer = nil
+        photosSupported = false
+        photoReady = false
+        photoKeySent = false
+        photoSyncRequested = false
+        photoBundles = [:]
         transmit = nil
         online = false
         badgeSupported = false
@@ -184,6 +203,24 @@ final class MessageStore: ObservableObject {
             error = nil
             Task { await flush() }
         } catch { self.error = "Could not save the message. Clear read history if storage is full." }
+    }
+
+    func sendPhoto(_ jpeg: Data, to peer: String) -> Bool {
+        guard trusted()[peer] != nil, supported, photosSupported, !storageBlocked,
+              ChatImage.image(jpeg) != nil else {
+            error = "Photos require a verified device, updated relay, and a prepared image up to 128 KB."
+            return false
+        }
+        do {
+            try persist(entries + [Entry(id: LobbyProtocol.randomID(), peer: peer, outgoing: true,
+                text: "", photo: jpeg, date: Date(), state: .pending, unread: false)])
+            error = nil
+            Task { await flush() }
+            return true
+        } catch {
+            self.error = "Could not save the photo. Clear read history if storage is full."
+            return false
+        }
     }
 
     func retry(_ entry: Entry) {
@@ -267,7 +304,12 @@ final class MessageStore: ObservableObject {
             guard generation == id else { return }
             try await transmit(["type": "chat-pull"])
             guard generation == id else { return }
-            let pending = entries.filter { $0.outgoing && [.pending, .queued].contains($0.state) }
+            if photosSupported && !photoKeySent {
+                try await transmit(ChatProtocol.keyBundle(signing, scope: scope, photos: true))
+                guard generation == id else { return }
+                photoKeySent = true
+            }
+            let pending = entries.filter { $0.outgoing && $0.photo == nil && [.pending, .queued].contains($0.state) }
                 .sorted { (attempts[$0.id] ?? .distantPast) < (attempts[$1.id] ?? .distantPast) }
             for entry in pending.prefix(5) {
                 guard generation == id, let index = entries.firstIndex(where: { $0.id == entry.id && $0.outgoing }) else { return }
@@ -289,8 +331,63 @@ final class MessageStore: ObservableObject {
                 }
                 try await transmit(next[index].envelope!)
             }
+            schedulePhotos()
         } catch {
             if generation == id { self.error = "Messages could not sync. Saved pending messages will retry." }
+        }
+    }
+
+    private func schedulePhotos() {
+        guard photoReady, let photoTransfer, let signing, let transmit else { return }
+        guard photoTask == nil else { photoSyncRequested = true; return }
+        let id = generation
+        photoTask = Task {
+            defer {
+                if generation == id {
+                    photoTask = nil
+                    if photoSyncRequested {
+                        photoSyncRequested = false
+                        schedulePhotos()
+                    }
+                }
+            }
+            do {
+                let pending = entries.filter { $0.outgoing && $0.photo != nil && [.pending, .queued].contains($0.state) }
+                    .sorted { (attempts[$0.id] ?? .distantPast) < (attempts[$1.id] ?? .distantPast) }
+                if let entry = pending.first, let index = entries.firstIndex(where: { $0.id == entry.id && $0.outgoing }) {
+                    var next = entries
+                    if trusted()[entry.peer] == nil || entry.date < Date().addingTimeInterval(-ChatProtocol.lifetime + 60) {
+                        next[index].state = .failed
+                        try persist(next)
+                    } else {
+                        attempts[entry.id] = Date()
+                        if let bundle = photoBundles[entry.peer] {
+                            if next[index].envelope == nil {
+                                next[index].envelope = try ChatProtocol.sealPhoto(entry.photo!, to: entry.peer,
+                                    bundle: bundle, signing: signing, scope: scope, now: entry.date, id: entry.id)
+                                try persist(next)
+                            }
+                            // Queued photos poll only their status, never re-upload every fifteen seconds.
+                            let request = entry.state == .queued
+                                ? ["type": "chat-photo-status", "id": entry.id, "to": entry.peer]
+                                : next[index].envelope!
+                            let reply = try await photoTransfer(request)
+                            guard generation == id, !Task.isCancelled else { return }
+                            receive(reply)
+                        } else {
+                            try await transmit(["type": "chat-photo-key-get", "to": entry.peer])
+                            guard generation == id, !Task.isCancelled else { return }
+                        }
+                    }
+                }
+                let incoming = try await photoTransfer(["type": "chat-photo-pull"])
+                guard generation == id, !Task.isCancelled else { return }
+                receive(incoming)
+            } catch {
+                if generation == id && !Task.isCancelled {
+                    self.error = "Photo transfer paused. Saved photos will retry without interrupting calls."
+                }
+            }
         }
     }
 
@@ -302,22 +399,36 @@ final class MessageStore: ObservableObject {
                 online = true
                 pushAvailable = message["push"] == "yes"
                 badgeSupported = message["badges"] == "1"
+                photosSupported = message["photos"] == "1" && photoTransfer != nil
                 status = "Private text messages are end-to-end encrypted."
                 synchronizeBadge()
+            case "chat-photo-ready":
+                guard photosSupported else { return }
+                photoReady = true
+                status = "Private text and photos are end-to-end encrypted."
+                Task { await flush() }
+            case "chat-photo-key":
+                guard photosSupported, let peer = message["identity"], trusted()[peer] != nil else { return }
+                _ = try ChatProtocol.verifyBundle(message, identity: peer, scope: scope, photos: true)
+                photoBundles[peer] = message
+                Task { await flush() }
             case "chat-key":
                 guard let peer = message["identity"], trusted()[peer] != nil else { return }
                 _ = try ChatProtocol.verifyBundle(message, identity: peer, scope: scope)
                 bundles[peer] = message
-                status = "Private text messages are end-to-end encrypted."
+                status = photoReady ? "Private text and photos are end-to-end encrypted."
+                                    : "Private text messages are end-to-end encrypted."
                 Task { await flush() }
-            case "chat-send":
+            case "chat-send", "chat-photo":
                 guard let peer = message["from"], trusted()[peer] != nil else { return }
-                let text = try ChatProtocol.open(message, signing: signing, scope: scope)
+                let photo = message["type"] == "chat-photo"
+                    ? try ChatProtocol.openPhoto(message, signing: signing, scope: scope) : nil
+                let text = photo == nil ? try ChatProtocol.open(message, signing: signing, scope: scope) : ""
                 let key = peer + "|" + message["id"]!
                 if seen[key] == nil {
                     var nextSeen = seen
                     nextSeen[key] = Date()
-                    let entry = Entry(id: message["id"]!, peer: peer, outgoing: false, text: text,
+                    let entry = Entry(id: message["id"]!, peer: peer, outgoing: false, text: text, photo: photo,
                         date: Date(timeIntervalSince1970: Double(message["created"]!)!),
                         state: .delivered, unread: selectedPeer != peer)
                     try persist(entries + [entry], seen: nextSeen)
@@ -345,6 +456,8 @@ final class MessageStore: ObservableObject {
                 try persist(next)
             case "chat-unavailable":
                 status = "Waiting for the recipient to enable messaging and verify your device."
+            case "chat-photo-unavailable":
+                status = "Waiting for the recipient to update Canddle, open it, and enable photo messaging."
             default: break
             }
         } catch {

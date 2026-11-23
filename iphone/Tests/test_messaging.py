@@ -31,19 +31,24 @@ async def run_probe(config, *args):
             await process.wait()
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-async def test_native_private_messaging_and_call_coexistence(tmp_path, enabled):
+@pytest.mark.parametrize("enabled,photos", [(False, False), (True, False), (True, True)])
+async def test_native_private_messaging_and_call_coexistence(tmp_path, enabled, photos):
     messages = Messages(str(tmp_path / "queue.sqlite"), TOKEN) if enabled else None
     relay = Relay(TOKEN, messages=messages)
     try:
         async with build_server(relay, "127.0.0.1", 0) as server:
             address = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/relay"
-            output = await run_probe(dict(address=address, token=TOKEN, enabled=enabled))
+            output = await run_probe(
+                dict(address=address, token=TOKEN, enabled=enabled, photos=photos)
+            )
             assert output.strip() == "PASS native private messaging"
         if messages:
             rows = messages.db.execute("SELECT envelope, receipt FROM chat_messages").fetchall()
             assert len(rows) == 2
             assert all(envelope is None and receipt for envelope, receipt in rows)
+            assert messages.db.execute("SELECT DISTINCT kind FROM chat_messages").fetchall() == [
+                ("photo" if photos else "text",)
+            ]
             badges = messages.db.execute("SELECT count FROM chat_badges ORDER BY count").fetchall()
             assert badges == [(0,), (2,)]  # Sender has none; recipient has two unread.
     finally:
